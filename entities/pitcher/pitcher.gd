@@ -2,7 +2,7 @@ extends Node2D
 class_name Pitcher
 
 # Default to your Ball scene so the node "just works" even if you forget to wire it.
-@export var ball_scene: PackedScene = preload ("res://entities/ball.tscn")
+@export var ball_scene: PackedScene = preload ("res://entities/ball/ball.tscn")
 @export var pitch_speed: float = 220.0
 
 @onready var hand: Marker2D = $Hand
@@ -15,7 +15,7 @@ func pitch() -> void:
 	# Fallback: if someone cleared the export in the editor, re-preload and continue.
 	if ball_scene == null:
 		push_warning("Pitcher: 'ball_scene' was null; preloading default Ball.tscn.")
-		ball_scene = preload("res://entities/ball.tscn")
+		ball_scene = preload("res://entities/ball/ball.tscn")
 	var b := ball_scene.instantiate()
 	get_tree().current_scene.add_child(b)
 	b.pitch_from(hand.global_position, Vector2.DOWN, pitch_speed)
