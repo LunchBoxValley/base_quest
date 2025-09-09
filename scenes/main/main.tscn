@@ -1,15 +1,22 @@
-[gd_scene load_steps=2 format=3 uid="uid://h45lxg1qdbak"]
+[gd_scene load_steps=4 format=3 uid="uid://h45lxg1qdbak"]
 
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher.tscn" id="1_hyk8p"]
+[ext_resource type="Script" uid="uid://cxwxvil8ox2ja" path="res://scenes/main/camera_2d.gd" id="1_k2fmo"]
+[ext_resource type="PackedScene" uid="uid://dfdc3plqb0gjy" path="res://entities/ball.tscn" id="2_iuonh"]
 
 [node name="Main" type="Node2D"]
 
 [node name="Camera2D" type="Camera2D" parent="."]
+script = ExtResource("1_k2fmo")
+default_target_path = NodePath("../Entities/Ball")
 
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
 
 [node name="Pitcher" parent="Entities" instance=ExtResource("1_hyk8p")]
+position = Vector2(160, 40)
+
+[node name="Ball" parent="Entities" instance=ExtResource("2_iuonh")]
 position = Vector2(160, 40)
 
 [node name="HomePlate" type="Marker2D" parent="Entities"]
