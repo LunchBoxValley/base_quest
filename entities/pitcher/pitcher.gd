@@ -52,7 +52,7 @@ func _do_pitch() -> void:
 		if travel > 40.0:
 			b.max_travel = travel
 
-	# Register with the plate so it can judge strike/ball ONCE (safe even if HomePlate not present)
+	# Register with the plate so it can judge strike/ball ONCE
 	if is_instance_valid(_home_plate) and _home_plate.has_method("register_ball"):
 		_home_plate.register_ball(b)
 
@@ -74,7 +74,7 @@ func _compute_pitch_direction() -> Vector2:
 	# Aim to a discrete X on the plate so left/right never wander far
 	if is_instance_valid(_home_plate):
 		var max_offset := strike_zone_half_width + out_of_zone_extra
-		var step := max_offset / float(aim_slots_per_side)   # 5 slots → finer steps
+		var step := max_offset / float(aim_slots_per_side)   # finer steps with more slots
 		var offset_x := _aim_slot * step
 
 		var target := _home_plate.global_position
@@ -92,16 +92,13 @@ func _compute_pitch_direction() -> Vector2:
 		return (base + offset).normalized()
 
 func _draw() -> void:
-	# Placeholder pitcher body
-	draw_rect(Rect2(Vector2(-4, -8), Vector2(8, 16)), Color(0.9, 0.9, 1.0), true)
-
-	# Aim indicator arrow from the hand
+	# Sprite2D child is the body; we only draw the aim arrow now.
 	if draw_aim_indicator and is_instance_valid(hand):
 		var dir := _compute_pitch_direction()
 		var start := hand.position
 		var end := start + dir * 12.0
-		draw_line(start, end, Color(1, 1, 0), 1.0, true)
+		draw_line(start, end, Color(1, 1, 0), 1.0, false)
 		var side := dir.rotated(0.9) * 4.0
 		var side2 := dir.rotated(-0.9) * 4.0
-		draw_line(end, end - side, Color(1, 1, 0), 1.0, true)
-		draw_line(end, end - side2, Color(1, 1, 0), 1.0, true)
+		draw_line(end, end - side, Color(1, 1, 0), 1.0, false)
+		draw_line(end, end - side2, Color(1, 1, 0), 1.0, false)

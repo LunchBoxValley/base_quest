@@ -2,7 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher/pitcher.tscn" id="1_hyk8p"]
 [ext_resource type="Script" uid="uid://cxwxvil8ox2ja" path="res://scenes/main/camera_2d.gd" id="1_k2fmo"]
-[ext_resource type="Script" uid="uid://4s03w2188o4w" path="res://scenes/main/home_plate.gd" id="2_k2fmo"]
+[ext_resource type="PackedScene" uid="uid://u2rstsvds5jn" path="res://entities/homeplate/home_plate.tscn" id="2_k2fmo"]
 
 [node name="Main" type="Node2D"]
 
@@ -10,9 +10,8 @@
 script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
 
-[node name="HomePlate" type="Node2D" parent="."]
+[node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
 position = Vector2(160, 132)
-script = ExtResource("2_k2fmo")
 
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
@@ -20,7 +19,3 @@ y_sort_enabled = true
 [node name="Pitcher" parent="Entities" instance=ExtResource("1_hyk8p")]
 position = Vector2(160, 48)
 home_plate_path = NodePath("../../HomePlate")
-out_of_zone_extra = 4.0
-
-[node name="HomePlate" type="Marker2D" parent="Entities"]
-position = Vector2(160, 132)

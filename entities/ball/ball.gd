@@ -11,6 +11,7 @@ var _active := false
 var _start_pos := Vector2.ZERO
 
 func _ready() -> void:
+	# Hide until pitched; parent visibility will also affect the Sprite2D child.
 	visible = false
 
 func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom_speed: float = -1.0) -> void:
@@ -19,16 +20,14 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 	_velocity = direction.normalized() * (speed if custom_speed <= 0.0 else custom_speed)
 	_active = true
 	visible = true
-	queue_redraw()
 
 func _physics_process(delta: float) -> void:
 	if not _active:
 		return
 	global_position += _velocity * delta
+
+	# Lifetime cap: free once we've traveled far enough (Pitcher may override max_travel)
 	if global_position.distance_to(_start_pos) >= max_travel:
 		_active = false
 		out_of_play.emit()
 		queue_free()
-
-func _draw() -> void:
-	draw_circle(Vector2.ZERO, 1.5, Color.WHITE)

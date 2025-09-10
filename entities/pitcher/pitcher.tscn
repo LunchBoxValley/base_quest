@@ -1,9 +1,79 @@
-[gd_scene load_steps=2 format=3 uid="uid://b3csctfbk3plb"]
+[gd_scene load_steps=12 format=3 uid="uid://b3csctfbk3plb"]
 
 [ext_resource type="Script" uid="uid://bofcigu3myv4a" path="res://entities/pitcher/pitcher.gd" id="1_wsxdh"]
+[ext_resource type="Texture2D" uid="uid://x7w2370dnhh" path="res://assets/sprites/Minifantasy_NPCsCarpenterIdle.png" id="2_5fwch"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ajnkh"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(0, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_l6jpl"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(32, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0a36j"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(64, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vcm06"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(96, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_lkhuq"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(128, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_nq5e5"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(160, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qgm4e"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(192, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_510q1"]
+atlas = ExtResource("2_5fwch")
+region = Rect2(224, 0, 32, 32)
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_towbv"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_ajnkh")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_l6jpl")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_0a36j")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_vcm06")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_lkhuq")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_nq5e5")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_qgm4e")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_510q1")
+}],
+"loop": true,
+"name": &"idle",
+"speed": 5.0
+}]
 
 [node name="Pitcher" type="Node2D"]
 script = ExtResource("1_wsxdh")
 
 [node name="Hand" type="Marker2D" parent="."]
 position = Vector2(0, 10)
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+sprite_frames = SubResource("SpriteFrames_towbv")
+animation = &"idle"
+autoplay = "idle"

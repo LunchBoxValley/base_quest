@@ -1,6 +1,21 @@
-[gd_scene load_steps=2 format=3 uid="uid://dfdc3plqb0gjy"]
+[gd_scene load_steps=4 format=3 uid="uid://dfdc3plqb0gjy"]
 
 [ext_resource type="Script" uid="uid://bcwqse17snrhp" path="res://entities/ball/ball.gd" id="1_61umk"]
+[ext_resource type="Texture2D" uid="uid://pgj5nf7q26x0" path="res://assets/sprites/ball.png" id="2_jyt08"]
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_w5wpn"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("2_jyt08")
+}],
+"loop": true,
+"name": &"default",
+"speed": 5.0
+}]
 
 [node name="Ball" type="Node2D"]
 script = ExtResource("1_61umk")
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+sprite_frames = SubResource("SpriteFrames_w5wpn")
