@@ -8,7 +8,7 @@ class_name Pitcher
 
 # Tuning
 @export var pitch_speed: float = 220.0
-@export var aim_slots_per_side: int = 3           # -3..3 (7 slots total)
+@export var aim_slots_per_side: int = 5           # -5..5 (11 slots total)
 @export var strike_zone_half_width: float = 12.0  # if zone_size.x == 24, this is 12
 @export var out_of_zone_extra: float = 3.0        # furthest slot sits just outside zone edge
 
@@ -17,7 +17,7 @@ class_name Pitcher
 
 @onready var hand: Marker2D = $Hand
 
-var _aim_slot: int = 0        # -3..3, 0 is center
+var _aim_slot: int = 0        # -5..5, 0 is center
 var _home_plate: Node2D
 
 func _ready() -> void:
@@ -49,8 +49,12 @@ func _do_pitch() -> void:
 	# Clamp travel so the ball reaches the plate but not far beyond
 	if is_instance_valid(_home_plate) and b is Ball:
 		var travel := (_home_plate.global_position.y - hand.global_position.y) + 4.0
-		if travel > 40.0: # safety floor so extremely close layouts still move
+		if travel > 40.0:
 			b.max_travel = travel
+
+	# Register with the plate so it can judge strike/ball ONCE (safe even if HomePlate not present)
+	if is_instance_valid(_home_plate) and _home_plate.has_method("register_ball"):
+		_home_plate.register_ball(b)
 
 	# Compute direction toward the targeted X on the plate
 	var dir := _compute_pitch_direction()
@@ -70,7 +74,7 @@ func _compute_pitch_direction() -> Vector2:
 	# Aim to a discrete X on the plate so left/right never wander far
 	if is_instance_valid(_home_plate):
 		var max_offset := strike_zone_half_width + out_of_zone_extra
-		var step := max_offset / float(aim_slots_per_side)   # e.g., 3 slots → thirds
+		var step := max_offset / float(aim_slots_per_side)   # 5 slots → finer steps
 		var offset_x := _aim_slot * step
 
 		var target := _home_plate.global_position
@@ -83,7 +87,7 @@ func _compute_pitch_direction() -> Vector2:
 	else:
 		# Fallback if plate not set: small angular nudge
 		var base := Vector2.DOWN
-		var strength := 0.25
+		var strength := 0.18
 		var offset := Vector2(float(_aim_slot) * strength, 0.0)
 		return (base + offset).normalized()
 

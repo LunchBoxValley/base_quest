@@ -20,6 +20,7 @@ y_sort_enabled = true
 [node name="Pitcher" parent="Entities" instance=ExtResource("1_hyk8p")]
 position = Vector2(160, 48)
 home_plate_path = NodePath("../../HomePlate")
+out_of_zone_extra = 4.0
 
 [node name="HomePlate" type="Marker2D" parent="Entities"]
 position = Vector2(160, 132)
