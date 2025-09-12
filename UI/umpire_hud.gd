@@ -2,8 +2,8 @@
 extends Control
 class_name UmpireHUD
 
-@export var home_plate_path: NodePath      # drag your HomePlate node here
-@export var call_flash_time: float = 0.7   # seconds the big call stays visible
+@export var home_plate_path: NodePath
+@export var call_flash_time: float = 0.7
 @export var anchor_corner: int = Control.PRESET_TOP_LEFT
 @export var anchor_offset: Vector2 = Vector2(4, 4)
 
@@ -18,14 +18,12 @@ var strikes := 0
 var outs := 0
 
 func _ready() -> void:
-	# Anchor to top-left and ignore mouse so gameplay input passes through.
 	set_anchors_preset(anchor_corner)
 	position = anchor_offset
 	mouse_filter = MOUSE_FILTER_IGNORE
 
-	# Guard against missing nodes (prevents the "null instance .text" error)
 	if not (lbl_call and lbl_balls and lbl_strikes and lbl_outs and timer):
-		push_error("[UmpireHUD] One or more child nodes not found. Check your scene paths/names.")
+		push_error("[UmpireHUD] Missing child nodes. Check scene paths.")
 		return
 
 	lbl_call.text = ""
@@ -38,10 +36,8 @@ func _ready() -> void:
 func _wire_plate() -> void:
 	var plate := get_node_or_null(home_plate_path)
 	if plate == null:
-		push_warning("[UmpireHUD] home_plate_path is not set or not found.")
+		push_warning("[UmpireHUD] home_plate_path not set.")
 		return
-
-	# Godot 4 style: connect via signal objects, avoid duplicate connects.
 	if not plate.called_strike.is_connected(_on_called_strike):
 		plate.called_strike.connect(_on_called_strike)
 	if not plate.called_ball.is_connected(_on_called_ball):
@@ -67,15 +63,26 @@ func _on_called_ball() -> void:
 	_render()
 
 func _flash_call(t: String) -> void:
-	if lbl_call:
-		lbl_call.text = t
+	lbl_call.text = t
 	timer.start(call_flash_time)
 
 func _on_call_timer_timeout() -> void:
-	if lbl_call:
-		lbl_call.text = ""
+	lbl_call.text = ""
 
 func _render() -> void:
-	if lbl_balls:   lbl_balls.text   = "B: %d" % balls
-	if lbl_strikes: lbl_strikes.text = "S: %d" % strikes
-	if lbl_outs:    lbl_outs.text    = "O: %d" % outs
+	var old_b := lbl_balls.text
+	var old_s := lbl_strikes.text
+	var old_o := lbl_outs.text
+
+	lbl_balls.text   = "B: %d" % balls
+	lbl_strikes.text = "S: %d" % strikes
+	lbl_outs.text    = "O: %d" % outs
+
+	if lbl_balls.text != old_b: _pulse(lbl_balls)
+	if lbl_strikes.text != old_s: _pulse(lbl_strikes)
+	if lbl_outs.text != old_o: _pulse(lbl_outs)
+
+func _pulse(lbl: Label) -> void:
+	lbl.scale = Vector2(1.08, 1.08)
+	var tw := create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lbl, "scale", Vector2.ONE, 0.12)

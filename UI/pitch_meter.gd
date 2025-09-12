@@ -1,32 +1,34 @@
+# res://ui/pitch_meter.gd
 extends Control
 class_name PitchMeter
 
 signal finished(power: float, accuracy: float)
 
+@export var anchor_corner: int = Control.PRESET_TOP_LEFT
+@export var anchor_offset: Vector2 = Vector2(4, 4)
 @export var speed: float = 2.0  # cycles per second
+
 @onready var fg: ColorRect = $BarFG
 
 var _t := 0.0
-var _phase := 0        # 0 = power, 1 = accuracy, 2 = done
+var _phase := 0              # 0 = power, 1 = accuracy, 2 = done
 var running := false
-
 var power := 0.5
 var accuracy := 0.5
 
 func _ready() -> void:
-	set_process(true)
+	set_anchors_preset(anchor_corner)
+	position = anchor_offset
+	mouse_filter = MOUSE_FILTER_IGNORE
 	visible = false
-	add_to_group("pitch_meter")  # so Pitcher can find it
+	add_to_group("pitch_meter")
+	set_process(true)
 
 func start() -> void:
 	visible = true
 	running = true
 	_phase = 0
 	_t = 0.0
-
-func stop() -> void:
-	running = false
-	visible = false
 
 func lock() -> void:
 	if not running:
@@ -40,17 +42,17 @@ func lock() -> void:
 		_phase = 2
 		running = false
 		visible = false
-		emit_signal("finished", power, accuracy)
+		finished.emit(power, accuracy)
 
 func _process(delta: float) -> void:
 	if not running:
 		return
 	_t += delta * speed
 	var v := _current_value()
-	# assume BarFG width target is 48 px; adjust if you used a different size
+	# If your bar width differs, tweak 48.0 to match
 	fg.size.x = int(48.0 * v)
 
 func _current_value() -> float:
-	# ping-pong 0..1..0 sweep
+	# ping-pong 0..1..0
 	var r := fposmod(_t, 2.0)
-	return r if r <= 1.0 else 2.0 - r
+	return (r if r <= 1.0 else (2.0 - r))
