@@ -12,7 +12,9 @@ script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
-position = Vector2(160, 140)
+position = Vector2(160, 150)
+zone_width_px = 16
+zone_height_px = 16
 
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
@@ -20,7 +22,21 @@ y_sort_enabled = true
 [node name="Pitcher" parent="Entities" instance=ExtResource("1_hyk8p")]
 position = Vector2(160, 60)
 home_plate_path = NodePath("../../HomePlate")
-pitch_meter_path = NodePath("../../pitch_meter")
+pitch_meter_path = NodePath("../../HUD/pitch_meter")
 
-[node name="pitch_meter" parent="." instance=ExtResource("4_l3cfh")]
+[node name="HUD" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="pitch_meter" parent="HUD" instance=ExtResource("4_l3cfh")]
 visible = false
+anchors_preset = 0
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 0.0
+anchor_bottom = 0.0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 60.0
+offset_bottom = 16.0
+grow_horizontal = 1
+grow_vertical = 1
