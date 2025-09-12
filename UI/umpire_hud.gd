@@ -1,8 +1,10 @@
+# res://ui/UmpireHUD.gd
 extends Control
 class_name UmpireHUD
 
 @export var home_plate_path: NodePath
-@export var batter_path: NodePath        # ← NEW: drag your Batter node here
+@export var batter_path: NodePath
+@export var field_path: NodePath                 # NEW: wire to Field (FieldJudge)
 @export var call_flash_time: float = 0.7
 @export var anchor_corner: int = Control.PRESET_TOP_LEFT
 @export var anchor_offset: Vector2 = Vector2(4, 4)
@@ -28,7 +30,8 @@ func _ready() -> void:
 
 	lbl_call.text = ""
 	_wire_plate()
-	_wire_batter()  # ← NEW
+	_wire_batter()
+	_wire_field()   # NEW
 	_render()
 
 	if not timer.timeout.is_connected(_on_call_timer_timeout):
@@ -36,9 +39,7 @@ func _ready() -> void:
 
 func _wire_plate() -> void:
 	var plate := get_node_or_null(home_plate_path)
-	if plate == null:
-		push_warning("[UmpireHUD] home_plate_path not set.")
-		return
+	if plate == null: return
 	if not plate.called_strike.is_connected(_on_called_strike):
 		plate.called_strike.connect(_on_called_strike)
 	if not plate.called_ball.is_connected(_on_called_ball):
@@ -46,14 +47,30 @@ func _wire_plate() -> void:
 
 func _wire_batter() -> void:
 	var bat := get_node_or_null(batter_path)
-	if bat == null:
-		push_warning("[UmpireHUD] batter_path not set (HIT! flash will be skipped).")
-		return
+	if bat == null: return
 	if bat.has_signal("hit") and not bat.hit.is_connected(_on_batter_hit):
 		bat.hit.connect(_on_batter_hit)
 
+func _wire_field() -> void:
+	var field := get_node_or_null(field_path)
+	if field == null: return
+	if field.has_signal("foul_ball") and not field.foul_ball.is_connected(_on_foul_ball):
+		field.foul_ball.connect(_on_foul_ball)
+	if field.has_signal("home_run") and not field.home_run.is_connected(_on_home_run):
+		field.home_run.connect(_on_home_run)
+
 func _on_batter_hit() -> void:
-	_flash_call("HIT!")   # doesn’t change counts; just a hype call
+	_flash_call("HIT!")
+
+func _on_foul_ball() -> void:
+	# Foul = strike unless already 2
+	if strikes < 2:
+		strikes += 1
+		_render()
+	_flash_call("FOUL")
+
+func _on_home_run() -> void:
+	_flash_call("HOME RUN!")
 
 func _on_called_strike() -> void:
 	strikes += 1
