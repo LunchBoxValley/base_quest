@@ -1,0 +1,27 @@
+[gd_scene load_steps=2 format=3 uid="uid://ct6sofvklorvw"]
+
+[ext_resource type="Script" uid="uid://d317hn22taj86" path="res://UI/pitch_meter.gd" id="1_mw6vt"]
+
+[node name="pitch_meter" type="Control"]
+layout_mode = 3
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 0
+script = ExtResource("1_mw6vt")
+
+[node name="BarBG" type="ColorRect" parent="."]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+color = Color(1, 1, 0.145098, 1)
+
+[node name="BarFG" type="ColorRect" parent="."]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 40.0
+color = Color(0.12845, 0.677449, 4.23551e-06, 1)

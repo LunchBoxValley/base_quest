@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3 uid="uid://h45lxg1qdbak"]
+[gd_scene load_steps=5 format=3 uid="uid://h45lxg1qdbak"]
 
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher/pitcher.tscn" id="1_hyk8p"]
 [ext_resource type="Script" uid="uid://cxwxvil8ox2ja" path="res://scenes/main/camera_2d.gd" id="1_k2fmo"]
 [ext_resource type="PackedScene" uid="uid://u2rstsvds5jn" path="res://entities/homeplate/home_plate.tscn" id="2_k2fmo"]
+[ext_resource type="PackedScene" uid="uid://ct6sofvklorvw" path="res://UI/pitch_meter.tscn" id="4_l3cfh"]
 
 [node name="Main" type="Node2D"]
 
@@ -11,11 +12,15 @@ script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
-position = Vector2(160, 132)
+position = Vector2(160, 140)
 
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
 
 [node name="Pitcher" parent="Entities" instance=ExtResource("1_hyk8p")]
-position = Vector2(160, 48)
+position = Vector2(160, 60)
 home_plate_path = NodePath("../../HomePlate")
+pitch_meter_path = NodePath("../../pitch_meter")
+
+[node name="pitch_meter" parent="." instance=ExtResource("4_l3cfh")]
+visible = false
