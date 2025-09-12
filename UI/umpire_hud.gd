@@ -1,8 +1,8 @@
-# res://ui/UmpireHUD.gd
 extends Control
 class_name UmpireHUD
 
 @export var home_plate_path: NodePath
+@export var batter_path: NodePath        # ← NEW: drag your Batter node here
 @export var call_flash_time: float = 0.7
 @export var anchor_corner: int = Control.PRESET_TOP_LEFT
 @export var anchor_offset: Vector2 = Vector2(4, 4)
@@ -28,6 +28,7 @@ func _ready() -> void:
 
 	lbl_call.text = ""
 	_wire_plate()
+	_wire_batter()  # ← NEW
 	_render()
 
 	if not timer.timeout.is_connected(_on_call_timer_timeout):
@@ -42,6 +43,17 @@ func _wire_plate() -> void:
 		plate.called_strike.connect(_on_called_strike)
 	if not plate.called_ball.is_connected(_on_called_ball):
 		plate.called_ball.connect(_on_called_ball)
+
+func _wire_batter() -> void:
+	var bat := get_node_or_null(batter_path)
+	if bat == null:
+		push_warning("[UmpireHUD] batter_path not set (HIT! flash will be skipped).")
+		return
+	if bat.has_signal("hit") and not bat.hit.is_connected(_on_batter_hit):
+		bat.hit.connect(_on_batter_hit)
+
+func _on_batter_hit() -> void:
+	_flash_call("HIT!")   # doesn’t change counts; just a hype call
 
 func _on_called_strike() -> void:
 	strikes += 1

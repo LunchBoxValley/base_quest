@@ -1,0 +1,76 @@
+[gd_scene load_steps=12 format=3 uid="uid://cmxbvj2cl018o"]
+
+[ext_resource type="Script" uid="uid://dv0y5gifgt65s" path="res://entities/batter/batter.gd" id="1_v8vae"]
+[ext_resource type="Texture2D" uid="uid://x7w2370dnhh" path="res://assets/sprites/Minifantasy_NPCsCarpenterIdle.png" id="2_mreuv"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_hespc"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(0, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wb8cc"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(32, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_yhulh"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(64, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ftdtv"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(96, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_nxia4"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(128, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_3jnd2"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(160, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0iw5r"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(192, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_cdvun"]
+atlas = ExtResource("2_mreuv")
+region = Rect2(224, 0, 32, 32)
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_r4whh"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_hespc")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_wb8cc")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_yhulh")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_ftdtv")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_nxia4")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_3jnd2")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_0iw5r")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_cdvun")
+}],
+"loop": true,
+"name": &"idle",
+"speed": 5.0
+}]
+
+[node name="Batter" type="Node2D"]
+script = ExtResource("1_v8vae")
+
+[node name="Sprite" type="AnimatedSprite2D" parent="."]
+sprite_frames = SubResource("SpriteFrames_r4whh")
+animation = &"idle"
+autoplay = "idle"
