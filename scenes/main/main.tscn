@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3 uid="uid://h45lxg1qdbak"]
+[gd_scene load_steps=6 format=3 uid="uid://h45lxg1qdbak"]
 
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher/pitcher.tscn" id="1_hyk8p"]
 [ext_resource type="Script" uid="uid://cxwxvil8ox2ja" path="res://scenes/main/camera_2d.gd" id="1_k2fmo"]
 [ext_resource type="PackedScene" uid="uid://u2rstsvds5jn" path="res://entities/homeplate/home_plate.tscn" id="2_k2fmo"]
 [ext_resource type="PackedScene" uid="uid://ct6sofvklorvw" path="res://UI/pitch_meter.tscn" id="4_l3cfh"]
+[ext_resource type="PackedScene" uid="uid://dwbatm1w3v8ha" path="res://UI/umpire_hud.tscn" id="5_6q06x"]
 
 [node name="Main" type="Node2D"]
 
@@ -40,3 +41,15 @@ offset_right = 60.0
 offset_bottom = 16.0
 grow_horizontal = 1
 grow_vertical = 1
+
+[node name="UmpireHUD" parent="HUD" instance=ExtResource("5_6q06x")]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_right = 0.0
+offset_left = 7.0
+offset_top = -23.0
+offset_right = 7.0
+offset_bottom = -23.0
+grow_horizontal = 1
+grow_vertical = 0
+home_plate_path = NodePath("../../HomePlate")
