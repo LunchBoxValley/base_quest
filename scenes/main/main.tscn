@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3 uid="uid://h45lxg1qdbak"]
+[gd_scene load_steps=9 format=3 uid="uid://h45lxg1qdbak"]
 
 [ext_resource type="Script" uid="uid://b014w7kq08rme" path="res://scenes/main/field.gd" id="1_hujxm"]
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher/pitcher.tscn" id="1_hyk8p"]
@@ -7,12 +7,17 @@
 [ext_resource type="PackedScene" uid="uid://ct6sofvklorvw" path="res://UI/pitch_meter.tscn" id="4_l3cfh"]
 [ext_resource type="PackedScene" uid="uid://cmxbvj2cl018o" path="res://entities/batter/batter.tscn" id="4_ow5a4"]
 [ext_resource type="PackedScene" uid="uid://dwbatm1w3v8ha" path="res://UI/umpire_hud.tscn" id="5_6q06x"]
+[ext_resource type="PackedScene" uid="uid://ckg4eqtth6vr1" path="res://entities/base/base.tscn" id="6_b1x3f"]
 
 [node name="Main" type="Node2D"]
 
 [node name="Field" type="Node2D" parent="."]
 script = ExtResource("1_hujxm")
 home_plate_path = NodePath("../HomePlate")
+first_base_path = NodePath("../Entities/Base")
+second_base_path = NodePath("../Entities/Base2")
+third_base_path = NodePath("../Entities/Base3")
+foul_margin_px = 4.0
 
 [node name="Camera2D" type="Camera2D" parent="."]
 script = ExtResource("1_k2fmo")
@@ -34,10 +39,40 @@ position = Vector2(160, 60)
 home_plate_path = NodePath("../../HomePlate")
 pitch_meter_path = NodePath("../../HUD/pitch_meter")
 charge_path = NodePath("Hand/PitchCharge")
+pitch_speed = 100.0
+draw_aim_indicator = false
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
 home_plate_path = NodePath("../../HomePlate")
+foul_chance_on_contact = 0.01
+
+[node name="Base" parent="Entities" instance=ExtResource("6_b1x3f")]
+position = Vector2(267, 40)
+
+[node name="Base2" parent="Entities" instance=ExtResource("6_b1x3f")]
+position = Vector2(94, 45)
+
+[node name="Base3" parent="Entities" instance=ExtResource("6_b1x3f")]
+position = Vector2(175, -11)
+
+[node name="Catcher" type="Marker2D" parent="Entities"]
+position = Vector2(160, 157)
+
+[node name="1B" type="Marker2D" parent="Entities"]
+position = Vector2(261, 43)
+
+[node name="2B" type="Marker2D" parent="Entities"]
+position = Vector2(148, 2)
+
+[node name="3B" type="Marker2D" parent="Entities"]
+position = Vector2(98, 55)
+
+[node name="Left_center" type="Marker2D" parent="Entities"]
+position = Vector2(59, -79)
+
+[node name="Right_center" type="Marker2D" parent="Entities"]
+position = Vector2(262, -82)
 
 [node name="HUD" type="CanvasLayer" parent="."]
 layer = 10

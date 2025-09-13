@@ -1,21 +1,16 @@
-# res://scenes/main/pitcher.gd
-# Starts charge zoom when the (hidden) meter starts; snaps back on release.
 extends Node2D
 class_name Pitcher
 
-# Scenes/paths
 @export var ball_scene: PackedScene = preload("res://entities/ball/ball.tscn")
 @export var home_plate_path: NodePath
-@export var pitch_meter_path: NodePath      # keep the meter in the scene, show_ui=false
-@export var charge_path: NodePath           # Hand/PitchCharge (CPUParticles2D)
+@export var pitch_meter_path: NodePath
+@export var charge_path: NodePath       # CPUParticles2D under Hand
 
-# Tuning
 @export var pitch_speed: float = 220.0
 @export var aim_slots_per_side: int = 4
 @export var strike_zone_half_width: float = 12.0
 @export var out_of_zone_extra: float = 2.0
 
-# Visuals
 @export var draw_aim_indicator: bool = true
 
 @onready var hand: Marker2D = $Hand
@@ -31,10 +26,13 @@ func _ready() -> void:
 	charge = get_node_or_null(charge_path)
 	if charge == null and hand:
 		charge = hand.get_node_or_null("PitchCharge")
+
+	var meter := _get_meter()
+	if meter and not meter.phase_locked.is_connected(_on_meter_phase_locked):
+		meter.phase_locked.connect(_on_meter_phase_locked)
 	queue_redraw()
 
 func _process(_delta: float) -> void:
-	# Mirror meter into the particle effect while charging
 	if _meter_active:
 		var meter := _get_meter()
 		if meter and charge and charge.has_method("set_level") \
@@ -48,7 +46,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	if Input.is_action_just_pressed("aim_right"):
 		_aim_slot = min(_aim_slot + 1, aim_slots_per_side)
 		queue_redraw(); return
-
 	if Input.is_action_just_pressed("pitch"):
 		var meter := _get_meter()
 		if meter:
@@ -65,12 +62,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				meter.lock()
 		else:
-			# No meter in scene: quick puff and throw
 			if charge and charge.has_method("start_charge"):
 				charge.start_charge()
 				if charge.has_method("set_level"): charge.set_level(1.0, 1)
 				if charge.has_method("release_burst"): charge.release_burst(1.0)
 			_do_pitch(1.0, 1.0)
+
+func _on_meter_phase_locked(phase: int, value: float) -> void:
+	if charge and (charge is CanvasItem):
+		Juice.pulse_scale(charge as CanvasItem, 1.10, 0.08)
+	# Optional SFX: Juice.play_one_shot(tick_stream)
 
 func _on_meter_finished(power: float, accuracy: float) -> void:
 	_meter_active = false
@@ -105,11 +106,10 @@ func _do_pitch(power: float, accuracy: float) -> void:
 	var speed_mult = clamp(0.7 + 0.6 * clamp(power, 0.0, 1.0), 0.1, 2.0)
 	b.pitch_from(hand.global_position, dir, pitch_speed * speed_mult)
 
-	# SNAP BACK zoom on release, then follow ball
 	var cam := get_tree().get_first_node_in_group("game_camera")
 	if cam:
 		if cam.has_method("charge_zoom_end"):
-			cam.charge_zoom_end()  # snaps or eases based on camera export
+			cam.charge_zoom_end()
 		if cam.has_method("follow_target"):
 			cam.follow_target(b)
 		if cam.has_method("kick"):
@@ -119,6 +119,13 @@ func _do_pitch(power: float, accuracy: float) -> void:
 				if is_instance_valid(cam) and cam.has_method("follow_default"):
 					cam.follow_default()
 			)
+
+	# Follow-through recoil (1–2 frames)
+	var spr := $Sprite
+	if spr:
+		spr.rotation = deg_to_rad(-6)
+		var tw := spr.create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(spr, "rotation", 0.0, 0.12)
 
 func _compute_pitch_direction_with_accuracy(accuracy: float) -> Vector2:
 	if is_instance_valid(_home_plate):

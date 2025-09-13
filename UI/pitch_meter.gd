@@ -1,20 +1,19 @@
-# res://ui/pitch_meter.gd
-# Meter still drives timing (power → accuracy) but stays invisible by default.
 extends Control
 class_name PitchMeter
 
 signal finished(power: float, accuracy: float)
+signal phase_locked(phase: int, value: float)
 
-@export var show_ui: bool = false          # ← keep the HUD hidden
+@export var show_ui: bool = false
 @export var anchor_corner: int = Control.PRESET_TOP_LEFT
 @export var anchor_offset: Vector2 = Vector2(4, 4)
-@export var speed: float = 2.0             # sweep cycles per second
-@export var bar_width: float = 48.0        # only used if UI is shown
+@export var speed: float = 2.0
+@export var bar_width: float = 48.0
 
-@onready var fg: ColorRect = $BarFG        # optional; safe if missing
+@onready var fg: ColorRect = $BarFG
 
 var _t: float = 0.0
-var _phase: int = 0                        # 0 = power, 1 = accuracy, 2 = done
+var _phase: int = 0       # 0 = power, 1 = accuracy, 2 = done
 var running: bool = false
 
 var power: float = 0.5
@@ -24,7 +23,7 @@ func _ready() -> void:
 	set_anchors_preset(anchor_corner)
 	position = anchor_offset
 	mouse_filter = MOUSE_FILTER_IGNORE
-	visible = show_ui                        # ← respect show_ui
+	visible = show_ui
 	add_to_group("pitch_meter")
 	set_process(true)
 
@@ -46,10 +45,12 @@ func lock() -> void:
 		return
 	if _phase == 0:
 		power = _current_value()
+		phase_locked.emit(0, power)
 		_phase = 1
 		_t = 0.0
 	elif _phase == 1:
 		accuracy = _current_value()
+		phase_locked.emit(1, accuracy)
 		_phase = 2
 		running = false
 		if show_ui:
@@ -65,11 +66,9 @@ func _process(delta: float) -> void:
 		fg.size.x = int(bar_width * v)
 
 func _current_value() -> float:
-	# Ping-pong sweep 0→1→0
 	var r := fposmod(_t, 2.0)
 	return r if r <= 1.0 else (2.0 - r)
 
-# Exposed getters so Pitcher/particles can mirror the live value/phase.
 func current_value() -> float:
 	if running:
 		return _current_value()

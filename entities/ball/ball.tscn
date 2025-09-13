@@ -19,9 +19,12 @@ animations = [{
 }]
 
 [node name="Ball" type="Node2D"]
+z_index = 50
 script = ExtResource("1_61umk")
 
 [node name="Anim" type="AnimatedSprite2D" parent="."]
 sprite_frames = SubResource("SpriteFrames_w5wpn")
 animation = &"spin"
 autoplay = "spin"
+
+[node name="Trail" type="Line2D" parent="."]

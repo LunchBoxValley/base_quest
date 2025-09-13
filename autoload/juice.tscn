@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://dyujo7xc62wy2"]
+
+[ext_resource type="Script" uid="uid://dp2w7o04bctgo" path="res://autoload/game_juice.gd" id="1_f0qts"]
+
+[node name="Juice" type="Node"]
+script = ExtResource("1_f0qts")

@@ -1,10 +1,9 @@
-# res://ui/UmpireHUD.gd
 extends Control
 class_name UmpireHUD
 
 @export var home_plate_path: NodePath
 @export var batter_path: NodePath
-@export var field_path: NodePath                 # NEW: wire to Field (FieldJudge)
+@export var field_path: NodePath
 @export var call_flash_time: float = 0.7
 @export var anchor_corner: int = Control.PRESET_TOP_LEFT
 @export var anchor_offset: Vector2 = Vector2(4, 4)
@@ -31,7 +30,7 @@ func _ready() -> void:
 	lbl_call.text = ""
 	_wire_plate()
 	_wire_batter()
-	_wire_field()   # NEW
+	_wire_field()
 	_render()
 
 	if not timer.timeout.is_connected(_on_call_timer_timeout):
@@ -63,14 +62,16 @@ func _on_batter_hit() -> void:
 	_flash_call("HIT!")
 
 func _on_foul_ball() -> void:
-	# Foul = strike unless already 2
 	if strikes < 2:
 		strikes += 1
 		_render()
 	_flash_call("FOUL")
+	Juice.flash_overlay(0.06, 0.16)
 
 func _on_home_run() -> void:
 	_flash_call("HOME RUN!")
+	Juice.hitstop(0.12)
+	Juice.flash_overlay(0.10, 0.22)
 
 func _on_called_strike() -> void:
 	strikes += 1
