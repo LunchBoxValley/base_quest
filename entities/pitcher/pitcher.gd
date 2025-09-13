@@ -23,6 +23,9 @@ class_name Pitcher
 @export var charge_zoom_in_mul: float = 1.20   # ≥1.0 zooms IN (20% closer)
 @export var zoom_snap_time: float = 0.10
 
+# ---------- Trail on fast pitch ----------
+@export var fast_pitch_trail_threshold: float = 0.85  # fraction of full charge to show trail
+
 # ---------- Internal state ----------
 var _hand: Node2D
 var _cam: Camera2D          # actually GameCamera, but safe-typed as Camera2D
@@ -81,7 +84,6 @@ func _start_charge() -> void:
 	if _cam:
 		_cam_zoom_base = _cam.zoom
 		if _cam.has_method("begin_charge_focus"):
-			# snap = true to remove any lingering offset immediately
 			_cam.call("begin_charge_focus", self, true)
 
 	if _fx:
@@ -137,6 +139,14 @@ func _release_pitch() -> void:
 	if b is Ball:
 		_current_ball = b
 
+	# Fastball trail hint (only near full power)
+	var show_trail = power_t >= clamp(fast_pitch_trail_threshold, 0.0, 1.0)
+	var trail := b.get_node_or_null("Trail")
+	if trail and (trail is Line2D):
+		(trail as Line2D).visible = show_trail
+		if not show_trail:
+			(trail as Line2D).clear_points()
+
 	# Lock mound until play ends
 	_play_locked = true
 	_hook_ball_end(b)
@@ -172,7 +182,7 @@ func _unlock_after_play() -> void:
 	if _fx:
 		_fx.visible = false
 		_fx.emitting = false
-	# camera returns to default via GameCamera's follow logic
+	# camera returns to default via GameCamera
 
 # ---------------------- Camera juice ----------------------
 func _apply_charge_zoom() -> void:

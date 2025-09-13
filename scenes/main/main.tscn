@@ -22,7 +22,6 @@ foul_margin_px = 4.0
 
 [node name="Camera2D" type="Camera2D" parent="."]
 script = ExtResource("1_k2fmo")
-default_target_path = NodePath("../Entities/Pitcher")
 charge_focus_offset = Vector2(0, 30)
 follow_overscroll_pad = Vector2(640, 320)
 
@@ -41,8 +40,6 @@ ball_scene = ExtResource("5_b1x3f")
 hand_path = NodePath("Hand")
 camera_path = NodePath("../../Camera2D")
 pitch_charge_path = NodePath("Hand/PitchCharge")
-speed_min = 80.0
-speed_max = 100.0
 
 [node name="PitchCharge" parent="Entities/Pitcher/Hand" index="0"]
 z_index = 40

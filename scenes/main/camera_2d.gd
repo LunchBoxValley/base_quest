@@ -1,11 +1,10 @@
-# res://systems/GameCamera.gd
 extends Camera2D
 class_name GameCamera
 
 @export var enable_on_start: bool = true
 
 @export_group("Targets & Offsets")
-@export var default_target_path: NodePath                 # e.g., Pitcher node or a MoundFocus marker
+@export var default_target_path: NodePath                 # e.g., Pitcher or a MoundFocus marker
 @export var default_offset: Vector2 = Vector2(0, -60)     # pre-pitch framing (pitcher ~1/3 from top)
 @export var follow_ball_offset: Vector2 = Vector2.ZERO    # usually centered on ball
 @export var charge_focus_offset: Vector2 = Vector2.ZERO   # EXACT center on pitcher while charging
@@ -17,8 +16,8 @@ class_name GameCamera
 
 @export_group("World Bounds")
 @export var bounds_enabled: bool = true
-@export var bounds_rect: Rect2 = Rect2(Vector2.ZERO, Vector2(640, 360))  # your 640×360 field
-@export var clamp_during_charge: bool = false             # usually FALSE to avoid offset while zooming in
+@export var bounds_rect: Rect2 = Rect2(Vector2.ZERO, Vector2(640, 360))  # field size 640×360
+@export var clamp_during_charge: bool = false             # FALSE to avoid offset while zooming in
 
 @export_group("Follow Overscroll")
 @export var follow_overscroll_enabled: bool = true        # allow camera to go a bit beyond bounds when following ball
@@ -43,6 +42,10 @@ var _return_tw: Tween = null
 var _shake_t: float = 0.0
 var _shake_dur: float = 0.0
 var _shake_amp: float = 0.0
+
+# Hitstop support
+var _hitstop_timer: Timer = null
+var _timescale_before: float = 1.0
 
 func _ready() -> void:
 	enabled = enable_on_start
@@ -176,6 +179,40 @@ func kick(amplitude: float = 2.0, duration: float = 0.12) -> void:
 	_shake_amp = max(0.0, amplitude)
 	_shake_dur = max(0.0001, duration)
 	_shake_t = _shake_dur
+
+# --- Hitstop (global timescale dip with ignore_time_scale timer) ---
+func hitstop(duration: float = 0.06) -> void:
+	_cancel_hitstop()
+	_timescale_before = Engine.time_scale
+	Engine.time_scale = 0.05
+	_hitstop_timer = Timer.new()
+	_hitstop_timer.one_shot = true
+	_hitstop_timer.wait_time = max(0.0001, duration)
+	_hitstop_timer.ignore_time_scale = true
+	add_child(_hitstop_timer)
+	_hitstop_timer.timeout.connect(_end_hitstop)
+	_hitstop_timer.start()
+
+func _end_hitstop() -> void:
+	Engine.time_scale = _timescale_before
+	if _hitstop_timer:
+		_hitstop_timer.queue_free()
+		_hitstop_timer = null
+
+func _cancel_hitstop() -> void:
+	Engine.time_scale = _timescale_before
+	if _hitstop_timer:
+		_hitstop_timer.stop()
+		_hitstop_timer.queue_free()
+		_hitstop_timer = null
+
+# --- HR-specific subtle pan out and back (zoom < 1.0 = farther) ---
+func hr_pan_out_and_back(pan_out_mul: float = 0.94, tween_time: float = 0.25, hold_time: float = 0.20) -> void:
+	var base := zoom
+	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(self, "zoom", base * pan_out_mul, tween_time)
+	tw.tween_interval(hold_time)
+	tw.tween_property(self, "zoom", base, tween_time)
 
 # -------- Post-play sequencing --------
 func _on_followed_ball_over() -> void:

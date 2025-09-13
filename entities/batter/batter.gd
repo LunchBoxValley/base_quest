@@ -41,6 +41,7 @@ signal hit
 @export var non_foul_side_scale: float = 0.55
 @export var min_upward_for_fair: float = 0.25
 
+@export var outfield_min_travel_px: float = 220.0  # threshold to treat liner/fly as outfield
 @export var bat_offset: Vector2 = Vector2(0, -2)
 
 @onready var sprite: AnimatedSprite2D = $Sprite
@@ -148,13 +149,46 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 
 	ball.max_travel = max(ball.max_travel, travel)
 
-	# Camera juice + FOLLOW BALL
+	# Camera follow
 	var cam := get_tree().get_first_node_in_group("game_camera")
 	if cam:
 		if cam.has_method("kick"):
 			cam.kick(2.0, 0.12)
 		if cam.has_method("follow_target"):
-			cam.follow_target(ball, true)   # <— snap to ball and follow until out_of_play
+			cam.follow_target(ball, true)
+
+	# —— Conditional JUICE ——
+	var is_hr = (profile.label == "blast")
+	var is_outfield = (not force_foul) and (
+		profile.label == "blast" or profile.label == "fly" or
+		(profile.label == "liner" and travel >= outfield_min_travel_px)
+	)
+
+	if is_hr and cam:
+		# HR: tiny shake first, then hitstop + trail + subtle pan-out
+		_set_ball_trail(ball, false)  # will enable after shake
+		var tmr := Timer.new()
+		tmr.one_shot = true
+		tmr.wait_time = 0.12
+		tmr.ignore_time_scale = true
+		add_child(tmr)
+		tmr.timeout.connect(func():
+			_set_ball_trail(ball, true)
+			if cam.has_method("hitstop"):
+				cam.hitstop(0.07)
+			if cam.has_method("hr_pan_out_and_back"):
+				cam.hr_pan_out_and_back(0.95, 0.25, 0.18)
+			tmr.queue_free()
+		)
+		tmr.start()
+	elif is_outfield and cam:
+		# Outfield (non-HR): quick hitstop + trail
+		_set_ball_trail(ball, true)
+		if cam.has_method("hitstop"):
+			cam.hitstop(0.05)
+	else:
+		# Infield / foul / grounder: no hitstop, no trail
+		_set_ball_trail(ball, false)
 
 	hit.emit()
 
@@ -162,6 +196,15 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	var judge := get_tree().get_first_node_in_group("field_judge")
 	if judge and judge.has_method("track_batted_ball"):
 		judge.track_batted_ball(ball)
+
+func _set_ball_trail(ball: Node, on: bool) -> void:
+	if ball == null:
+		return
+	var trail := ball.get_node_or_null("Trail")
+	if trail and (trail is Line2D):
+		(trail as Line2D).visible = on
+		if not on:
+			(trail as Line2D).clear_points()
 
 func _get_method_argc(obj: Object, name: String) -> int:
 	var list := obj.get_method_list()
