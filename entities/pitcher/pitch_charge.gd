@@ -1,4 +1,3 @@
-# res://effects/pitch_charge.gd
 extends CPUParticles2D
 class_name PitchCharge
 

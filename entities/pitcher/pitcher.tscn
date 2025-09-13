@@ -79,7 +79,7 @@ position = Vector2(0, 1)
 [node name="PitchCharge" type="CPUParticles2D" parent="Hand"]
 z_index = 20
 y_sort_enabled = true
-amount = 18
+amount = 10
 texture = ExtResource("2_l6jpl")
 local_coords = true
 emission_shape = 3

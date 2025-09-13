@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://h45lxg1qdbak"]
+[gd_scene load_steps=10 format=3 uid="uid://h45lxg1qdbak"]
 
 [ext_resource type="Script" uid="uid://b014w7kq08rme" path="res://scenes/main/field.gd" id="1_hujxm"]
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher/pitcher.tscn" id="1_hyk8p"]
@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" uid="uid://ct6sofvklorvw" path="res://UI/pitch_meter.tscn" id="4_l3cfh"]
 [ext_resource type="PackedScene" uid="uid://cmxbvj2cl018o" path="res://entities/batter/batter.tscn" id="4_ow5a4"]
 [ext_resource type="PackedScene" uid="uid://dwbatm1w3v8ha" path="res://UI/umpire_hud.tscn" id="5_6q06x"]
+[ext_resource type="PackedScene" uid="uid://dfdc3plqb0gjy" path="res://entities/ball/ball.tscn" id="5_b1x3f"]
 [ext_resource type="PackedScene" uid="uid://ckg4eqtth6vr1" path="res://entities/base/base.tscn" id="6_b1x3f"]
 
 [node name="Main" type="Node2D"]
@@ -22,8 +23,8 @@ foul_margin_px = 4.0
 [node name="Camera2D" type="Camera2D" parent="."]
 script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
-field_path = NodePath("../Field")
-charge_zoom_amount = 0.3
+charge_focus_offset = Vector2(0, 30)
+follow_overscroll_pad = Vector2(640, 320)
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
 position = Vector2(160, 150)
@@ -36,16 +37,19 @@ y_sort_enabled = true
 
 [node name="Pitcher" parent="Entities" instance=ExtResource("1_hyk8p")]
 position = Vector2(160, 60)
-home_plate_path = NodePath("../../HomePlate")
-pitch_meter_path = NodePath("../../HUD/pitch_meter")
-charge_path = NodePath("Hand/PitchCharge")
-pitch_speed = 100.0
-draw_aim_indicator = false
+ball_scene = ExtResource("5_b1x3f")
+hand_path = NodePath("Hand")
+camera_path = NodePath("../../Camera2D")
+pitch_charge_path = NodePath("Hand/PitchCharge")
+speed_min = 80.0
+speed_max = 100.0
+
+[node name="PitchCharge" parent="Entities/Pitcher/Hand" index="0"]
+z_index = 40
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
 home_plate_path = NodePath("../../HomePlate")
-foul_chance_on_contact = 0.01
 
 [node name="Base" parent="Entities" instance=ExtResource("6_b1x3f")]
 position = Vector2(267, 40)

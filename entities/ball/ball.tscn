@@ -1,7 +1,8 @@
-[gd_scene load_steps=5 format=3 uid="uid://dfdc3plqb0gjy"]
+[gd_scene load_steps=6 format=3 uid="uid://dfdc3plqb0gjy"]
 
 [ext_resource type="Script" uid="uid://bcwqse17snrhp" path="res://entities/ball/ball.gd" id="1_61umk"]
 [ext_resource type="Texture2D" uid="uid://pgj5nf7q26x0" path="res://assets/sprites/ball.png" id="2_jyt08"]
+[ext_resource type="Script" uid="uid://wb0wryv534fd" path="res://entities/ball/shadow.gd" id="2_we1t7"]
 [ext_resource type="Texture2D" uid="uid://bjewe6x3eroto" path="res://assets/sprites/ball2.png" id="3_w5wpn"]
 
 [sub_resource type="SpriteFrames" id="SpriteFrames_w5wpn"]
@@ -21,6 +22,12 @@ animations = [{
 [node name="Ball" type="Node2D"]
 z_index = 50
 script = ExtResource("1_61umk")
+max_travel = 300.0
+
+[node name="Shadow" type="Node2D" parent="."]
+z_index = -1
+scale = Vector2(0.8, 0.6)
+script = ExtResource("2_we1t7")
 
 [node name="Anim" type="AnimatedSprite2D" parent="."]
 sprite_frames = SubResource("SpriteFrames_w5wpn")
