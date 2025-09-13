@@ -1,22 +1,25 @@
 # res://scenes/main/pitcher.gd
+# Starts charge zoom when the (hidden) meter starts; snaps back on release.
 extends Node2D
 class_name Pitcher
 
 # Scenes/paths
 @export var ball_scene: PackedScene = preload("res://entities/ball/ball.tscn")
 @export var home_plate_path: NodePath
-@export var pitch_meter_path: NodePath   # optional: or found by group "pitch_meter"
+@export var pitch_meter_path: NodePath      # keep the meter in the scene, show_ui=false
+@export var charge_path: NodePath           # Hand/PitchCharge (CPUParticles2D)
 
 # Tuning
 @export var pitch_speed: float = 220.0
-@export var aim_slots_per_side: int = 4              # -4..+4
+@export var aim_slots_per_side: int = 4
 @export var strike_zone_half_width: float = 12.0
-@export var out_of_zone_extra: float = 2.0           # modest outside
+@export var out_of_zone_extra: float = 2.0
 
 # Visuals
 @export var draw_aim_indicator: bool = true
 
 @onready var hand: Marker2D = $Hand
+@onready var charge: Node = null
 
 var _aim_slot: int = 0
 var _home_plate: Node2D
@@ -25,7 +28,18 @@ var _meter_active := false
 func _ready() -> void:
 	add_to_group("pitcher")
 	_home_plate = get_node_or_null(home_plate_path)
+	charge = get_node_or_null(charge_path)
+	if charge == null and hand:
+		charge = hand.get_node_or_null("PitchCharge")
 	queue_redraw()
+
+func _process(_delta: float) -> void:
+	# Mirror meter into the particle effect while charging
+	if _meter_active:
+		var meter := _get_meter()
+		if meter and charge and charge.has_method("set_level") \
+		and meter.has_method("current_value") and meter.has_method("current_phase"):
+			charge.set_level(meter.current_value(), meter.current_phase())
 
 func _unhandled_input(event: InputEvent) -> void:
 	if Input.is_action_just_pressed("aim_left"):
@@ -42,16 +56,26 @@ func _unhandled_input(event: InputEvent) -> void:
 				_meter_active = true
 				if not meter.finished.is_connected(_on_meter_finished):
 					meter.finished.connect(_on_meter_finished)
-				if meter.has_method("start"):
-					meter.start()
+				meter.start()
+				if charge and charge.has_method("start_charge"):
+					charge.start_charge()
+				var cam := get_tree().get_first_node_in_group("game_camera")
+				if cam and cam.has_method("charge_zoom_start"):
+					cam.charge_zoom_start()
 			else:
-				if meter.has_method("lock"):
-					meter.lock()
+				meter.lock()
 		else:
+			# No meter in scene: quick puff and throw
+			if charge and charge.has_method("start_charge"):
+				charge.start_charge()
+				if charge.has_method("set_level"): charge.set_level(1.0, 1)
+				if charge.has_method("release_burst"): charge.release_burst(1.0)
 			_do_pitch(1.0, 1.0)
 
 func _on_meter_finished(power: float, accuracy: float) -> void:
 	_meter_active = false
+	if charge and charge.has_method("release_burst"):
+		charge.release_burst(power)
 	_do_pitch(power, accuracy)
 
 func _get_meter() -> Node:
@@ -81,11 +105,15 @@ func _do_pitch(power: float, accuracy: float) -> void:
 	var speed_mult = clamp(0.7 + 0.6 * clamp(power, 0.0, 1.0), 0.1, 2.0)
 	b.pitch_from(hand.global_position, dir, pitch_speed * speed_mult)
 
+	# SNAP BACK zoom on release, then follow ball
 	var cam := get_tree().get_first_node_in_group("game_camera")
-	if cam and cam.has_method("follow_target"):
-		cam.follow_target(b)
+	if cam:
+		if cam.has_method("charge_zoom_end"):
+			cam.charge_zoom_end()  # snaps or eases based on camera export
+		if cam.has_method("follow_target"):
+			cam.follow_target(b)
 		if cam.has_method("kick"):
-			cam.kick(1.5, 0.10)  # micro pop on release
+			cam.kick(1.5, 0.10)
 		if b.has_signal("out_of_play"):
 			b.out_of_play.connect(func():
 				if is_instance_valid(cam) and cam.has_method("follow_default"):
@@ -97,7 +125,6 @@ func _compute_pitch_direction_with_accuracy(accuracy: float) -> Vector2:
 		var max_offset := strike_zone_half_width + out_of_zone_extra
 		var step := max_offset / float(aim_slots_per_side)
 		var offset_x := _aim_slot * step
-		# tighter wobble
 		var wobble_amp = step * 0.4 * (1.0 - clamp(accuracy, 0.0, 1.0))
 		offset_x += (randf() * 2.0 - 1.0) * wobble_amp
 
@@ -114,7 +141,7 @@ func _compute_pitch_direction_with_accuracy(accuracy: float) -> Vector2:
 
 func _draw() -> void:
 	if draw_aim_indicator and is_instance_valid(hand):
-		var dir := _compute_pitch_direction_with_accuracy(1.0) # preview w/o wobble
+		var dir := _compute_pitch_direction_with_accuracy(1.0)
 		var start := hand.position
 		var end := start + dir * 12.0
 		draw_line(start, end, Color(1, 1, 0), 1.0, false)

@@ -18,6 +18,7 @@ home_plate_path = NodePath("../HomePlate")
 script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
 field_path = NodePath("../Field")
+charge_zoom_amount = 0.3
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
 position = Vector2(160, 150)
@@ -32,9 +33,11 @@ y_sort_enabled = true
 position = Vector2(160, 60)
 home_plate_path = NodePath("../../HomePlate")
 pitch_meter_path = NodePath("../../HUD/pitch_meter")
+charge_path = NodePath("Hand/PitchCharge")
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
+home_plate_path = NodePath("../../HomePlate")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 layer = 10
@@ -54,15 +57,8 @@ grow_horizontal = 1
 grow_vertical = 1
 
 [node name="UmpireHUD" parent="HUD" instance=ExtResource("5_6q06x")]
-anchors_preset = 2
-anchor_top = 1.0
-anchor_right = 0.0
-offset_left = 7.0
-offset_top = -23.0
-offset_right = 7.0
-offset_bottom = -23.0
-grow_horizontal = 1
-grow_vertical = 0
 home_plate_path = NodePath("../../HomePlate")
 batter_path = NodePath("../../Entities/Batter")
 field_path = NodePath("../../Field")
+
+[editable path="Entities/Pitcher"]

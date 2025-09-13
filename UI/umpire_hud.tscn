@@ -4,11 +4,10 @@
 
 [node name="UmpireHUD" type="Control"]
 layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
+anchors_preset = 2
+anchor_top = 1.0
 anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+grow_vertical = 0
 script = ExtResource("1_p2gtg")
 
 [node name="CallTimer" type="Timer" parent="."]
