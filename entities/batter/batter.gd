@@ -1,4 +1,3 @@
-# res://entities/Batter.gd
 extends Node2D
 class_name Batter
 
@@ -42,8 +41,13 @@ signal hit
 @export var non_foul_side_scale: float = 0.55
 @export var min_upward_for_fair: float = 0.25
 
-@export var outfield_min_travel_px: float = 220.0  # treat long liners as outfield
+@export var outfield_min_travel_px: float = 220.0
 @export var bat_offset: Vector2 = Vector2(0, -2)
+
+# ---------- Input Influence ----------
+@export_group("Input Influence")
+@export var bat_input_bias_scale: float = 0.35   # pre-scale bias amount
+@export var input_effect_scale: float = 0.10     # NEW: 10% of prior strength
 
 @onready var sprite: AnimatedSprite2D = $Sprite
 var _plate: Node2D
@@ -95,10 +99,8 @@ func _check_contact() -> void:
 			break
 
 func _on_contact(ball: Ball, hitpos: Vector2) -> void:
-	# Tag the ball so HomePlate won't judge strike/ball for this pitch
 	ball.set_meta("batted", true)
 
-	# Timing quality 0..1 (1 best)
 	var phase = 1.0 - clamp(_swing_t / max(0.0001, swing_window), 0.0, 1.0)
 	var offset = phase - sweet_spot_phase
 	var norm = clamp(abs(offset) / max(0.0001, sweet_width), 0.0, 1.0)
@@ -112,6 +114,15 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	var spray = randf_range(-spray_random, spray_random) * (1.0 - q)
 	var side_mix = clamp(point_bias + timing_bias + spray, -1.0, 1.0)
 	side_mix = lerp(side_mix, 0.0, clamp(center_pull, 0.0, 1.0))
+
+	# --- Input nudges spray (INVERTED + 10% strength) ---
+	# lr: Right = +1, Left = -1. Invert by negating it.
+	var lr := Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
+	var q_boost = lerp(0.5, 1.0, q)  # better timing allows a touch more influence
+	side_mix = clamp(
+		side_mix + (-lr) * bat_input_bias_scale * clamp(input_effect_scale, 0.0, 1.0) * q_boost,
+		-1.0, 1.0
+	)
 
 	var profile := _sample_contact_profile(q)
 	var force_foul = randf() < clamp(foul_chance_on_contact, 0.0, 1.0)
@@ -142,7 +153,6 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 
 	var meta := {"label": profile.label, "type": profile.label, "angle_deg": angle_deg}
 
-	# Compatibility with 2-arg vs 3-arg Ball.deflect
 	var argc := _get_method_argc(ball, "deflect")
 	if argc >= 3:
 		ball.call("deflect", dir, ev, meta)
@@ -153,7 +163,6 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 
 	ball.max_travel = max(ball.max_travel, travel)
 
-	# Camera follow
 	var cam := get_tree().get_first_node_in_group("game_camera")
 	if cam:
 		if cam.has_method("kick"):
@@ -161,20 +170,18 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 		if cam.has_method("follow_target"):
 			cam.follow_target(ball, true)
 
-	# —— HUD calls ——
 	var hud := get_tree().get_first_node_in_group("umpire_hud")
 	if hud:
 		if force_foul:
 			if hud.has_method("call_foul"):
-				hud.call("call_foul")                    # BLUE FOUL
+				hud.call("call_foul")
 		else:
 			var is_hr = (profile.label == "blast")
 			if is_hr and hud.has_method("call_home_run"):
-				hud.call("call_home_run")               # STROBING HR
+				hud.call("call_home_run")
 			elif hud.has_method("call_hit"):
-				hud.call("call_hit")                    # GREEN HIT
+				hud.call("call_hit")
 
-	# —— Conditional JUICE (trail + hitstop only for outfield/HR) ——
 	var is_hr2 = (profile.label == "blast")
 	var is_outfield = (not force_foul) and (
 		profile.label == "blast" or profile.label == "fly" or
@@ -182,8 +189,7 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	)
 
 	if is_hr2 and cam:
-		# HR: tiny shake first, then hitstop + trail + subtle pan-out
-		_set_ball_trail(ball, false)  # enable after shake
+		_set_ball_trail(ball, false)
 		var tmr := Timer.new()
 		tmr.one_shot = true
 		tmr.wait_time = 0.12
@@ -199,17 +205,14 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 		)
 		tmr.start()
 	elif is_outfield and cam:
-		# Outfield (non-HR): quick hitstop + trail
 		_set_ball_trail(ball, true)
 		if cam.has_method("hitstop"):
 			cam.hitstop(0.05)
 	else:
-		# Infield / foul / grounder: no hitstop, no trail
 		_set_ball_trail(ball, false)
 
 	hit.emit()
 
-	# Let FieldJudge track for FOUL/HR if present
 	var judge := get_tree().get_first_node_in_group("field_judge")
 	if judge and judge.has_method("track_batted_ball"):
 		judge.track_batted_ball(ball)

@@ -26,6 +26,11 @@ class_name Pitcher
 # ---------- Trail on fast pitch ----------
 @export var fast_pitch_trail_threshold: float = 0.85  # fraction of full charge to show trail
 
+# ---------- Input Influence ----------
+@export_group("Input Influence")
+@export var pitch_input_influence_deg: float = 6.0    # max extra deg from L/R on release (pre-scale)
+@export var input_effect_scale: float = 0.10          # NEW: 10% of prior strength
+
 # ---------- Internal state ----------
 var _hand: Node2D
 var _cam: Camera2D          # actually GameCamera, but safe-typed as Camera2D
@@ -80,7 +85,6 @@ func _start_charge() -> void:
 	_charging = true
 	_charge_t = 0.0
 
-	# Recenter camera on the pitcher (no offset) and start zoom-in
 	if _cam:
 		_cam_zoom_base = _cam.zoom
 		if _cam.has_method("begin_charge_focus"):
@@ -98,7 +102,6 @@ func _advance_charge(delta: float) -> void:
 func _release_pitch() -> void:
 	_charging = false
 
-	# split charge into power (phase 0) and accuracy (phase 1)
 	var p_split = clamp(phase_split, 0.05, 0.95)
 	var power_t = clamp(_charge_t / p_split, 0.0, 1.0)
 	var acc_t := 0.0
@@ -106,11 +109,18 @@ func _release_pitch() -> void:
 		acc_t = clamp((_charge_t - p_split) / (1.0 - p_split), 0.0, 1.0)
 
 	var spd = lerp(speed_min, speed_max, _ease_out(power_t))
-
 	var spread_deg = lerp(spread_deg_lo, spread_deg_hi, _ease_out(acc_t))
 	var jitter_rad := deg_to_rad(spread_deg) * randf_range(-1.0, 1.0)
 
+	# Base aim (slots) + random jitter
 	var dir := pitch_dir.normalized().rotated(deg_to_rad(aim_angle_deg)).rotated(jitter_rad)
+
+	# --- Input steering at release (INVERTED + 10% strength) ---
+	# lr: Right = +1, Left = -1. Invert by negating it.
+	var lr := Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
+	var steer_deg = -lr * clamp(pitch_input_influence_deg, 0.0, 45.0) * clamp(input_effect_scale, 0.0, 1.0)
+	if abs(steer_deg) > 0.001:
+		dir = dir.rotated(deg_to_rad(steer_deg))
 
 	if ball_scene == null:
 		push_warning("Pitcher: ball_scene not assigned.")
@@ -182,13 +192,12 @@ func _unlock_after_play() -> void:
 	if _fx:
 		_fx.visible = false
 		_fx.emitting = false
-	# camera returns to default via GameCamera
 
 # ---------------------- Camera juice ----------------------
 func _apply_charge_zoom() -> void:
 	if _cam == null:
 		return
-	var mul = max(1.0, charge_zoom_in_mul)                   # ensure zooms IN
+	var mul = max(1.0, charge_zoom_in_mul)
 	var eased := _ease_out(_charge_t)
 	var target = _cam_zoom_base * lerp(1.0, mul, eased)
 	_cam.zoom = target
