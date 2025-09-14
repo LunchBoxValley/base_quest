@@ -1,3 +1,4 @@
+# res://entities/Batter.gd
 extends Node2D
 class_name Batter
 
@@ -41,7 +42,7 @@ signal hit
 @export var non_foul_side_scale: float = 0.55
 @export var min_upward_for_fair: float = 0.25
 
-@export var outfield_min_travel_px: float = 220.0  # threshold to treat liner/fly as outfield
+@export var outfield_min_travel_px: float = 220.0  # treat long liners as outfield
 @export var bat_offset: Vector2 = Vector2(0, -2)
 
 @onready var sprite: AnimatedSprite2D = $Sprite
@@ -94,6 +95,9 @@ func _check_contact() -> void:
 			break
 
 func _on_contact(ball: Ball, hitpos: Vector2) -> void:
+	# Tag the ball so HomePlate won't judge strike/ball for this pitch
+	ball.set_meta("batted", true)
+
 	# Timing quality 0..1 (1 best)
 	var phase = 1.0 - clamp(_swing_t / max(0.0001, swing_window), 0.0, 1.0)
 	var offset = phase - sweet_spot_phase
@@ -157,16 +161,29 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 		if cam.has_method("follow_target"):
 			cam.follow_target(ball, true)
 
-	# —— Conditional JUICE ——
-	var is_hr = (profile.label == "blast")
+	# —— HUD calls ——
+	var hud := get_tree().get_first_node_in_group("umpire_hud")
+	if hud:
+		if force_foul:
+			if hud.has_method("call_foul"):
+				hud.call("call_foul")                    # BLUE FOUL
+		else:
+			var is_hr = (profile.label == "blast")
+			if is_hr and hud.has_method("call_home_run"):
+				hud.call("call_home_run")               # STROBING HR
+			elif hud.has_method("call_hit"):
+				hud.call("call_hit")                    # GREEN HIT
+
+	# —— Conditional JUICE (trail + hitstop only for outfield/HR) ——
+	var is_hr2 = (profile.label == "blast")
 	var is_outfield = (not force_foul) and (
 		profile.label == "blast" or profile.label == "fly" or
 		(profile.label == "liner" and travel >= outfield_min_travel_px)
 	)
 
-	if is_hr and cam:
+	if is_hr2 and cam:
 		# HR: tiny shake first, then hitstop + trail + subtle pan-out
-		_set_ball_trail(ball, false)  # will enable after shake
+		_set_ball_trail(ball, false)  # enable after shake
 		var tmr := Timer.new()
 		tmr.one_shot = true
 		tmr.wait_time = 0.12

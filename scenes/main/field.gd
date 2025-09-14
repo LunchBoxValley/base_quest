@@ -123,20 +123,58 @@ func _physics_process(_delta: float) -> void:
 	# Home run: crosses the wall while between the foul lines
 	if pos.y <= outfield_wall_y and pos.x >= xl and pos.x <= xr:
 		home_run.emit()
-		_end_play()
+		_call_hud_home_run()
+		_apply_hr_juice()             # << bring back the time stop & pan
+		_mark_ball_out_of_play()      # camera will hold then ease back
+		_end_tracking()
 		return
 
 	# Foul: outside the fair wedge
 	if pos.x < xl or pos.x > xr:
 		foul_ball.emit()
-		_end_play()
+		_call_hud_foul()
+		_mark_ball_out_of_play()
+		_end_tracking()
 		return
 
-func _end_play() -> void:
+func _apply_hr_juice() -> void:
+	# 1) quick subtle shake
 	var cam := get_tree().get_first_node_in_group("game_camera")
-	if cam and cam.has_method("follow_default"):
-		cam.follow_default()
-	_end_tracking()
+	if cam and cam.has_method("kick"):
+		cam.kick(2.0, 0.10)
+
+	# 2) after the shake, do hitstop + subtle pan-out
+	var tmr := Timer.new()
+	tmr.one_shot = true
+	tmr.wait_time = 0.12
+	tmr.ignore_time_scale = true
+	add_child(tmr)
+	tmr.timeout.connect(func():
+		# Prefer Juice singleton for time stop if available
+		var juice := get_node_or_null("/root/Juice")
+		if juice and juice.has_method("hitstop"):
+			juice.hitstop(0.07)
+		elif cam and cam.has_method("hitstop"):
+			cam.hitstop(0.07)
+
+		if cam and cam.has_method("hr_pan_out_and_back"):
+			cam.hr_pan_out_and_back(0.95, 0.25, 0.18)
+		tmr.queue_free()
+	)
+	tmr.start()
+
+func _mark_ball_out_of_play() -> void:
+	if _ball == null:
+		return
+	# Prefer unified camera flow: have the ball emit out_of_play so the camera
+	# pauses at ball pos then eases back, per our GameCamera contract.
+	if _ball.has_signal("out_of_play"):
+		_ball.emit_signal("out_of_play")
+	else:
+		# Fallback: steer camera to pitcher framing immediately.
+		var cam := get_tree().get_first_node_in_group("game_camera")
+		if cam and cam.has_method("focus_default"):
+			cam.call("focus_default", false)
 
 func _end_tracking() -> void:
 	_tracking = false
@@ -182,3 +220,17 @@ func _draw() -> void:
 		draw_circle(F, 3.0, Color(0.8,1,0.8,0.8))
 		draw_circle(S, 3.0, Color(0.8,0.8,1,0.8))
 		draw_circle(T, 3.0, Color(1,0.8,0.8,0.8))
+
+# ---------------- HUD helpers ----------------
+func _hud() -> Node:
+	return get_tree().get_first_node_in_group("umpire_hud")
+
+func _call_hud_foul() -> void:
+	var h := _hud()
+	if h and h.has_method("call_foul"):
+		h.call("call_foul")
+
+func _call_hud_home_run() -> void:
+	var h := _hud()
+	if h and h.has_method("call_home_run"):
+		h.call("call_home_run")

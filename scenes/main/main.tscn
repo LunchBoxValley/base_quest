@@ -615,7 +615,6 @@ home_plate_path = NodePath("../HomePlate")
 first_base_path = NodePath("../Entities/Base")
 second_base_path = NodePath("../Entities/Base2")
 third_base_path = NodePath("../Entities/Base3")
-foul_margin_px = 4.0
 
 [node name="TileMapLayer" type="TileMapLayer" parent="."]
 z_index = -20
@@ -624,14 +623,13 @@ tile_set = SubResource("TileSet_blune")
 
 [node name="Camera2D" type="Camera2D" parent="."]
 script = ExtResource("1_k2fmo")
+default_target_path = NodePath("../Entities/Pitcher")
 charge_focus_offset = Vector2(0, 30)
 follow_overscroll_pad = Vector2(640, 320)
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
 position = Vector2(160, 150)
-zone_width_px = 16
-zone_height_px = 16
-flash_time = 0.12
+zone_size = Vector2(14, 16)
 
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
@@ -695,8 +693,8 @@ grow_horizontal = 1
 grow_vertical = 1
 
 [node name="UmpireHUD" parent="HUD" instance=ExtResource("5_6q06x")]
-home_plate_path = NodePath("../../HomePlate")
-batter_path = NodePath("../../Entities/Batter")
-field_path = NodePath("../../Field")
+offset_top = -47.0
+offset_bottom = -47.0
 
 [editable path="Entities/Pitcher"]
+[editable path="HUD/UmpireHUD"]
