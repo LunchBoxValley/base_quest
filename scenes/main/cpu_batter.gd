@@ -51,12 +51,12 @@ func _physics_process(_delta: float) -> void:
 		if v.y <= 0.0:
 			continue
 
-		var contact_y := (_b._contact_point()).y
-		var dy := contact_y - ball.global_position.y
+		var contact_y = (_b._contact_point()).y
+		var dy = contact_y - ball.global_position.y
 		if dy <= 0.0:
 			continue
 
-		var t := dy / v.y
+		var t = dy / v.y
 		if t < best_t:
 			best_t = t
 			best_ball = ball

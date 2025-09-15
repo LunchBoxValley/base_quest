@@ -647,7 +647,7 @@ tile_set = SubResource("TileSet_blune")
 [node name="Camera2D" type="Camera2D" parent="."]
 script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
-charge_focus_offset = Vector2(0, 30)
+default_offset = Vector2(0, 30)
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
 position = Vector2(160, 150)
