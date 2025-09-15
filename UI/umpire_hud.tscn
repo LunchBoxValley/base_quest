@@ -9,10 +9,6 @@ anchor_top = 1.0
 anchor_bottom = 1.0
 grow_vertical = 0
 script = ExtResource("1_p2gtg")
-balls_label_path = NodePath("VBox/Row/Balls")
-strikes_label_path = NodePath("VBox/Row/Strikes")
-outs_label_path = NodePath("VBox/Row/Outs")
-flash_label_path = NodePath("VBox/Row/Flash")
 
 [node name="CallTimer" type="Timer" parent="."]
 
@@ -27,14 +23,14 @@ layout_mode = 2
 [node name="Row" type="HBoxContainer" parent="VBox"]
 layout_mode = 2
 
-[node name="Balls" type="Label" parent="VBox/Row"]
+[node name="BallsLabel" type="Label" parent="VBox/Row"]
 layout_mode = 2
 
-[node name="Strikes" type="Label" parent="VBox/Row"]
+[node name="StrikesLabel" type="Label" parent="VBox/Row"]
 layout_mode = 2
 
-[node name="Outs" type="Label" parent="VBox/Row"]
+[node name="OutsLabel" type="Label" parent="VBox/Row"]
 layout_mode = 2
 
-[node name="Flash" type="Label" parent="VBox/Row"]
+[node name="FlashLabel" type="Label" parent="VBox/Row"]
 layout_mode = 2

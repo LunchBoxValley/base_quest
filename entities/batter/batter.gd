@@ -3,6 +3,7 @@ class_name Batter
 
 signal hit
 
+@export var input_enabled: bool = true
 @export var home_plate_path: NodePath
 @export var swing_window: float = 0.12
 @export var sweet_spot_phase: float = 0.5
@@ -34,7 +35,7 @@ signal hit
 @export var travel_blast:    Vector2 = Vector2(340.0, 460.0)
 
 @export_group("Foul")
-@export var foul_chance_on_contact: float = 0.05
+@export var foul_chance_on_contact: float = 0.08
 
 @export_group("Anti-Foul Guards")
 @export var center_pull: float = 0.20
@@ -44,30 +45,29 @@ signal hit
 @export var outfield_min_travel_px: float = 220.0
 @export var bat_offset: Vector2 = Vector2(0, -2)
 
-# ---------- Input Influence ----------
 @export_group("Input Influence")
-@export var bat_input_bias_scale: float = 0.35   # pre-scale bias amount
-@export var input_effect_scale: float = 0.10     # NEW: 10% of prior strength
+@export var bat_input_bias_scale: float = 0.35
+@export var input_effect_scale: float = 0.10
 
 @onready var sprite: AnimatedSprite2D = $Sprite
 var _plate: Node2D
 var _swing_t: float = 0.0
 var _did_contact: bool = false
+var _ai_lr := 0.0
 
 func _ready() -> void:
 	_plate = get_node_or_null(home_plate_path)
 	if not InputMap.has_action("swing"):
 		InputMap.add_action("swing")
-		var ev := InputEventKey.new()
-		ev.keycode = KEY_X
+		var ev := InputEventKey.new(); ev.keycode = KEY_X
 		InputMap.action_add_event("swing", ev)
 	set_physics_process(true)
 
-func _unhandled_input(event: InputEvent) -> void:
+func _unhandled_input(_event: InputEvent) -> void:
+	if not input_enabled:
+		return
 	if Input.is_action_just_pressed("swing"):
-		_swing_t = swing_window
-		_did_contact = false
-		_play_swing_pose()
+		_trigger_swing()
 
 func _physics_process(delta: float) -> void:
 	if _swing_t > 0.0:
@@ -98,42 +98,51 @@ func _check_contact() -> void:
 			_on_contact(b, p)
 			break
 
+func _trigger_swing() -> void:
+	_swing_t = swing_window
+	_did_contact = false
+	_play_swing_pose()
+
+# ---------------------- PUBLIC AI API ----------------------
+func ai_set_lr_bias(lr: float) -> void:
+	_ai_lr = clamp(lr, -1.0, 1.0)
+
+func ai_swing_after(seconds: float) -> void:
+	var t := get_tree().create_timer(max(0.01, seconds))
+	t.timeout.connect(_trigger_swing)
+
+# ---------------------- Contact & outcome ----------------------
 func _on_contact(ball: Ball, hitpos: Vector2) -> void:
-	ball.set_meta("batted", true)
+	ball.set_meta("batted", true)     # mark batted so plate won't call B/S
 
 	var phase = 1.0 - clamp(_swing_t / max(0.0001, swing_window), 0.0, 1.0)
 	var offset = phase - sweet_spot_phase
 	var norm = clamp(abs(offset) / max(0.0001, sweet_width), 0.0, 1.0)
 	var q = 1.0 - norm
 
-	var plate_x := global_position.x
-	if is_instance_valid(_plate):
-		plate_x = _plate.global_position.x
+	var plate_x := (_plate.global_position.x if is_instance_valid(_plate) else global_position.x)
 	var point_bias = clamp((hitpos.x - plate_x) / 12.0, -1.0, 1.0)
 	var timing_bias = clamp(offset / max(0.0001, sweet_width), -1.0, 1.0) * timing_side_gain
 	var spray = randf_range(-spray_random, spray_random) * (1.0 - q)
 	var side_mix = clamp(point_bias + timing_bias + spray, -1.0, 1.0)
 	side_mix = lerp(side_mix, 0.0, clamp(center_pull, 0.0, 1.0))
 
-	# --- Input nudges spray (INVERTED + 10% strength) ---
-	# lr: Right = +1, Left = -1. Invert by negating it.
-	var lr := Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
-	var q_boost = lerp(0.5, 1.0, q)  # better timing allows a touch more influence
-	side_mix = clamp(
-		side_mix + (-lr) * bat_input_bias_scale * clamp(input_effect_scale, 0.0, 1.0) * q_boost,
-		-1.0, 1.0
-	)
+	var lr_input := 0.0
+	if input_enabled:
+		lr_input = Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
+	var lr := lr_input + _ai_lr
+
+	var q_boost = lerp(0.5, 1.0, q)
+	side_mix = clamp(side_mix + lr * bat_input_bias_scale * clamp(input_effect_scale, 0.0, 1.0) * q_boost, -1.0, 1.0)
 
 	var profile := _sample_contact_profile(q)
-	var force_foul = randf() < clamp(foul_chance_on_contact, 0.0, 1.0)
+	var force_foul = (randf() < clamp(foul_chance_on_contact, 0.0, 0.099))
 
 	var angle_deg := randf_range(profile.angle_range.x, profile.angle_range.y)
 	var rad := deg_to_rad(angle_deg)
 	var up := sin(rad)
 	var side_mag = max(0.2, cos(rad))
-	var side_sign := 1.0
-	if side_mix < 0.0:
-		side_sign = -1.0
+	var side_sign := (-1.0 if side_mix < 0.0 else 1.0)
 	var side_amount = abs(side_mix)
 
 	if force_foul:
@@ -152,79 +161,28 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	travel *= lerp(0.9, 1.15, q)
 
 	var meta := {"label": profile.label, "type": profile.label, "angle_deg": angle_deg}
-
 	var argc := _get_method_argc(ball, "deflect")
 	if argc >= 3:
 		ball.call("deflect", dir, ev, meta)
-	elif argc >= 2:
-		ball.call("deflect", dir, ev)
 	else:
 		ball.call("deflect", dir, ev)
 
 	ball.max_travel = max(ball.max_travel, travel)
 
+	# Announce generic HIT only; FieldJudge owns HR call when (and if) it clears the wall.
+	if not force_foul:
+		GameManager.call_hit(false)
+
 	var cam := get_tree().get_first_node_in_group("game_camera")
 	if cam:
-		if cam.has_method("kick"):
-			cam.kick(2.0, 0.12)
-		if cam.has_method("follow_target"):
-			cam.follow_target(ball, true)
-
-	var hud := get_tree().get_first_node_in_group("umpire_hud")
-	if hud:
-		if force_foul:
-			if hud.has_method("call_foul"):
-				hud.call("call_foul")
-		else:
-			var is_hr = (profile.label == "blast")
-			if is_hr and hud.has_method("call_home_run"):
-				hud.call("call_home_run")
-			elif hud.has_method("call_hit"):
-				hud.call("call_hit")
-
-	var is_hr2 = (profile.label == "blast")
-	var is_outfield = (not force_foul) and (
-		profile.label == "blast" or profile.label == "fly" or
-		(profile.label == "liner" and travel >= outfield_min_travel_px)
-	)
-
-	if is_hr2 and cam:
-		_set_ball_trail(ball, false)
-		var tmr := Timer.new()
-		tmr.one_shot = true
-		tmr.wait_time = 0.12
-		tmr.ignore_time_scale = true
-		add_child(tmr)
-		tmr.timeout.connect(func():
-			_set_ball_trail(ball, true)
-			if cam.has_method("hitstop"):
-				cam.hitstop(0.07)
-			if cam.has_method("hr_pan_out_and_back"):
-				cam.hr_pan_out_and_back(0.95, 0.25, 0.18)
-			tmr.queue_free()
-		)
-		tmr.start()
-	elif is_outfield and cam:
-		_set_ball_trail(ball, true)
-		if cam.has_method("hitstop"):
-			cam.hitstop(0.05)
-	else:
-		_set_ball_trail(ball, false)
-
-	hit.emit()
+		if cam.has_method("kick"): cam.kick(2.0, 0.12)
+		if cam.has_method("follow_target"): cam.follow_target(ball, true)
 
 	var judge := get_tree().get_first_node_in_group("field_judge")
 	if judge and judge.has_method("track_batted_ball"):
 		judge.track_batted_ball(ball)
 
-func _set_ball_trail(ball: Node, on: bool) -> void:
-	if ball == null:
-		return
-	var trail := ball.get_node_or_null("Trail")
-	if trail and (trail is Line2D):
-		(trail as Line2D).visible = on
-		if not on:
-			(trail as Line2D).clear_points()
+	hit.emit()
 
 func _get_method_argc(obj: Object, name: String) -> int:
 	var list := obj.get_method_list()
@@ -247,11 +205,9 @@ func _sample_contact_profile(q: float) -> Dictionary:
 	else:
 		var t = clamp((q - 0.70) / 0.30, 0.0, 1.0)
 		var blast_p = lerp(0.08, 0.22, t)
-		var use_blast = randf() < blast_p
-		if use_blast:
+		if randf() < blast_p:
 			return {"label":"blast", "angle_range": angle_blast, "ev_mul": ev_mul_blast, "travel_px": travel_blast}
-		else:
-			return {"label":"fly",   "angle_range": angle_fly,   "ev_mul": ev_mul_fly,   "travel_px": travel_fly}
+		return {"label":"fly", "angle_range": angle_fly, "ev_mul": ev_mul_fly, "travel_px": travel_fly}
 
 func _play_swing_pose() -> void:
 	if sprite:

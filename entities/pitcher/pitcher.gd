@@ -1,229 +1,340 @@
 extends Node2D
 class_name Pitcher
 
-# ---------- Scenes & Nodes ----------
+signal pitched(ball: Node2D)
+
+@export var input_enabled: bool = true
+@export var hand_path: NodePath
+@export var camera_path: NodePath
 @export var ball_scene: PackedScene
-@export var hand_path: NodePath            # Marker2D spawn (e.g. "Hand")
-@export var camera_path: NodePath          # GameCamera (Camera2D with GameCamera.gd)
-@export var pitch_charge_path: NodePath    # CPUParticles2D with PitchCharge.gd
+@export var charge_fx_path: NodePath
 
-# ---------- Pitch geometry ----------
-@export var pitch_dir: Vector2 = Vector2.DOWN
-@export var aim_angle_deg: float = 0.0     # left/center/right slots, etc.
+@export_group("Pitch Tuning")
+@export var min_power_speed: float = 160.0
+@export var max_power_speed: float = 320.0
+@export var max_charge_seconds: float = 3.0
 
-# ---------- Charge & throw tuning ----------
-@export var charge_full_time: float = 0.80
-@export var phase_split: float = 0.60
-@export var speed_min: float = 180.0
-@export var speed_max: float = 340.0
-@export var spread_deg_lo: float = 8.0
-@export var spread_deg_hi: float = 0.8
+@export_group("Aim Slots")
+@export var aim_step_deg: float = 4.0
+@export var aim_slots_left: int = 4
+@export var aim_slots_right: int = 4
+@export var base_aim_deg: float = 0.0
 
-# ---------- Camera juice ----------
-@export var charge_zoom_in_mul: float = 1.20   # ≥1.0 zooms IN (20% closer)
-@export var zoom_snap_time: float = 0.10
+@export_group("Charge Zoom (centered)")
+@export var charge_zoom_scale: float = 0.80      # 20% zoom-IN while charging
+@export var zoom_in_time: float = 0.35           # slower ease-in
+@export var zoom_out_time: float = 0.10          # snap-back on release
 
-# ---------- Trail on fast pitch ----------
-@export var fast_pitch_trail_threshold: float = 0.85  # fraction of full charge to show trail
+@export_group("Accuracy & Steer")
+@export var steer_max_deg: float = 8.0
+@export var inaccuracy_max_deg: float = 10.0
 
-# ---------- Input Influence ----------
-@export_group("Input Influence")
-@export var pitch_input_influence_deg: float = 6.0    # max extra deg from L/R on release (pre-scale)
-@export var input_effect_scale: float = 0.10          # NEW: 10% of prior strength
+@export_group("Human Cooldown")
+@export var human_cooldown_min: float = 3.0
 
-# ---------- Internal state ----------
-var _hand: Node2D
-var _cam: Camera2D          # actually GameCamera, but safe-typed as Camera2D
-var _fx: PitchCharge
+@onready var _hand: Node2D = get_node_or_null(hand_path)
+@onready var _cam: Node = get_node_or_null(camera_path)
+var _fx: Node = null
 
-var _charging: bool = false
-var _charge_t: float = 0.0
-var _play_locked: bool = false
-var _current_ball: Ball = null
-var _cam_zoom_base: Vector2 = Vector2.ONE
+var _charging := false
+var _charge_time := 0.0
+var _aim_index := 0
+var _play_locked := false
+
+var _human_cooldown_active := false
+var _human_cd_timer: SceneTreeTimer = null
 
 func _ready() -> void:
-	_hand = get_node_or_null(hand_path)
-	_cam = get_node_or_null(camera_path) as Camera2D
-	_fx = get_node_or_null(pitch_charge_path) as PitchCharge
-
-	if _cam:
-		_cam.enabled = true
-
 	if not InputMap.has_action("pitch"):
 		InputMap.add_action("pitch")
-		var ev := InputEventKey.new()
-		ev.keycode = KEY_ENTER
-		InputMap.action_add_event("pitch", ev)
-		var ev2 := InputEventKey.new()
-		ev2.keycode = KEY_KP_ENTER
-		InputMap.action_add_event("pitch", ev2)
+		var ev_enter := InputEventKey.new(); ev_enter.keycode = KEY_ENTER
+		InputMap.action_add_event("pitch", ev_enter)
+		var ev_space := InputEventKey.new(); ev_space.keycode = KEY_SPACE
+		InputMap.action_add_event("pitch", ev_space)
 
-	if _fx:
-		_fx.visible = false
-		_fx.emitting = false
+	_resolve_fx()
+	set_physics_process(true)
+	GameManager.play_state_changed.connect(_on_play_state_changed)
+	_reset_state()
 
-func _unhandled_input(event: InputEvent) -> void:
-	if _play_locked:
+func _on_play_state_changed(active: bool) -> void:
+	_play_locked = active
+
+func _reset_state() -> void:
+	_charging = false
+	_charge_time = 0.0
+	_fx_stop()
+
+# ---------------- INPUT (human) ----------------
+func _input(event: InputEvent) -> void:
+	if not input_enabled:
 		return
-	if Input.is_action_just_pressed("pitch"):
-		_start_charge()
-	if Input.is_action_just_released("pitch"):
-		if _charging:
-			_release_pitch()
 
-func _process(delta: float) -> void:
+	if (event.is_action_pressed("pitch") or event.is_action_pressed("ui_accept")) and not _charging:
+		if _can_pitch_now():
+			_start_charge()
+		return
+
+	if _charging and (event.is_action_released("pitch") or event.is_action_released("ui_accept")):
+		var level = clamp(_charge_time / max(0.001, max_charge_seconds), 0.0, 1.0)
+		var steer := _current_lr_steer()
+		_throw_with(level, steer)
+		return
+
+func _physics_process(delta: float) -> void:
 	if _charging:
-		_advance_charge(delta)
-		_apply_charge_zoom()
-		_update_charge_fx()
+		_charge_time = clamp(_charge_time + delta, 0.0, max_charge_seconds)
+		var level = clamp(_charge_time / max(0.001, max_charge_seconds), 0.0, 1.0)
+		_fx_set_level(0, level)
+		_update_aim_from_input()
 
-# ---------------------- Charge lifecycle ----------------------
+func _can_pitch_now() -> bool:
+	if _human_cooldown_active:
+		return false
+	if not _play_locked:
+		return true
+	for n in get_tree().get_nodes_in_group("balls"):
+		return false
+	return true
+
 func _start_charge() -> void:
-	if _play_locked:
-		return
 	_charging = true
-	_charge_t = 0.0
+	_charge_time = 0.0
+	_aim_index = 0
+	_fx_start()
+	_fx_set_level(0, 0.0)
 
-	if _cam:
-		_cam_zoom_base = _cam.zoom
-		if _cam.has_method("begin_charge_focus"):
-			_cam.call("begin_charge_focus", self, true)
+	# Smoothly center on pitcher while charging (no snap), then zoom 20% in.
+	var focus := _hand if is_instance_valid(_hand) else self
+	if _cam and _cam.has_method("begin_charge_focus"):
+		_cam.call("begin_charge_focus", focus, false)   # false = lerp to center (no jerk)
+	if _cam and _cam.has_method("zoom_to"):
+		_cam.call("zoom_to", charge_zoom_scale, zoom_in_time)
+	else:
+		# Fallback: direct property tween (still centered because camera position untouched)
+		var z := Vector2(1.0 / max(charge_zoom_scale, 0.0001), 1.0 / max(charge_zoom_scale, 0.0001))
+		var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_cam, "zoom", z, zoom_in_time)
 
-	if _fx:
-		_fx.start_charge()
+func _throw_with(level: float, steer_lr: float) -> void:
+	var power = clamp(level, 0.0, 1.0)
+	var acc = power
+	var speed = lerp(min_power_speed, max_power_speed, power)
 
-	_apply_charge_zoom()
+	var aim_deg := base_aim_deg + float(_aim_index) * aim_step_deg
+	var steer_deg = clamp(steer_lr, -1.0, 1.0) * steer_max_deg
+	var miss_deg = randf_range(-1.0, 1.0) * (1.0 - acc) * inaccuracy_max_deg
+	var final_deg = aim_deg + steer_deg + miss_deg
 
-func _advance_charge(delta: float) -> void:
-	var dt = max(0.0001, charge_full_time)
-	_charge_t = clamp(_charge_t + delta / dt, 0.0, 1.0)
+	var b := _spawn_ball()
+	if b:
+		var origin: Vector2
+		if is_instance_valid(_hand):
+			origin = _hand.global_position
+		else:
+			origin = global_position
+		var dir := Vector2(sin(deg_to_rad(final_deg)), 1.0).normalized()
+		_safe_call_pitch_from(b, origin, dir, speed, acc, steer_lr)
+		b.add_to_group("balls")
+		pitched.emit(b)
 
-func _release_pitch() -> void:
 	_charging = false
+	_fx_release(power)
 
-	var p_split = clamp(phase_split, 0.05, 0.95)
-	var power_t = clamp(_charge_t / p_split, 0.0, 1.0)
-	var acc_t := 0.0
-	if _charge_t > p_split:
-		acc_t = clamp((_charge_t - p_split) / (1.0 - p_split), 0.0, 1.0)
+	# Snap back to default framing distance; keep focusing pitcher until play starts.
+	if _cam and _cam.has_method("zoom_to"):
+		_cam.call("zoom_to", 1.0, zoom_out_time)
+	else:
+		var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_cam, "zoom", Vector2.ONE, zoom_out_time)
+	if _cam and _cam.has_method("end_charge_focus"):
+		_cam.call("end_charge_focus", false) # keep on pitcher framing (no snap)
 
-	var spd = lerp(speed_min, speed_max, _ease_out(power_t))
-	var spread_deg = lerp(spread_deg_lo, spread_deg_hi, _ease_out(acc_t))
-	var jitter_rad := deg_to_rad(spread_deg) * randf_range(-1.0, 1.0)
+	_start_human_cooldown()
 
-	# Base aim (slots) + random jitter
-	var dir := pitch_dir.normalized().rotated(deg_to_rad(aim_angle_deg)).rotated(jitter_rad)
-
-	# --- Input steering at release (INVERTED + 10% strength) ---
-	# lr: Right = +1, Left = -1. Invert by negating it.
-	var lr := Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
-	var steer_deg = -lr * clamp(pitch_input_influence_deg, 0.0, 45.0) * clamp(input_effect_scale, 0.0, 1.0)
-	if abs(steer_deg) > 0.001:
-		dir = dir.rotated(deg_to_rad(steer_deg))
-
+# ---------------- SPAWN ----------------
+func _spawn_ball() -> Node2D:
 	if ball_scene == null:
-		push_warning("Pitcher: ball_scene not assigned.")
-		if _fx:
-			_fx.release_burst(power_t)
-		_end_charge_camera()
-		return
-
-	var start_pos: Vector2 = global_position
+		push_error("[Pitcher] Assign Ball.tscn to 'ball_scene'.")
+		return null
+	var b := ball_scene.instantiate() as Node2D
+	var parent := get_tree().get_current_scene()
+	if parent == null:
+		parent = get_parent()
+	parent.add_child(b)
 	if is_instance_valid(_hand):
-		start_pos = _hand.global_position
-
-	var b := ball_scene.instantiate()
-	var host := get_parent()
-	if host == null:
-		host = get_tree().current_scene
-	host.add_child(b)
-	b.global_position = start_pos
-
-	if b.has_method("pitch_from"):
-		b.pitch_from(start_pos, dir, spd)
+		b.global_position = _hand.global_position
 	else:
-		if b.has_variable("_velocity"):
-			b._velocity = dir.normalized() * spd
+		b.global_position = global_position
+	return b
 
-	if b is Ball:
-		_current_ball = b
+# ---------------- AIM (slot nudge) ----------------
+func _update_aim_from_input() -> void:
+	var left := Input.is_action_pressed("ui_left")
+	var right := Input.is_action_pressed("ui_right")
+	var max_left := -aim_slots_left
+	var max_right := aim_slots_right
+	if left and not right:
+		_aim_index = clamp(_aim_index - 1, max_left, max_right)
+	elif right and not left:
+		_aim_index = clamp(_aim_index + 1, max_left, max_right)
 
-	# Fastball trail hint (only near full power)
-	var show_trail = power_t >= clamp(fast_pitch_trail_threshold, 0.0, 1.0)
-	var trail := b.get_node_or_null("Trail")
-	if trail and (trail is Line2D):
-		(trail as Line2D).visible = show_trail
-		if not show_trail:
-			(trail as Line2D).clear_points()
+func _current_lr_steer() -> float:
+	var s := (Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left"))
+	return clamp(s, -1.0, 1.0) * 0.10
 
-	# Lock mound until play ends
-	_play_locked = true
-	_hook_ball_end(b)
-
-	# FX + camera reset (stop charge focus and snap zoom back)
-	if _fx:
-		_fx.release_burst(power_t)
-	_end_charge_camera()
-
-func _end_charge_camera() -> void:
-	if _cam:
-		if _cam.has_method("end_charge_focus"):
-			_cam.call("end_charge_focus", false)
-		_zoom_reset()
-
-func _hook_ball_end(b: Node) -> void:
-	if b.has_signal("out_of_play"):
-		b.out_of_play.connect(_on_ball_out_of_play)
-	b.tree_exited.connect(_on_ball_tree_exited)
-
-func _on_ball_out_of_play() -> void:
-	_unlock_after_play()
-
-func _on_ball_tree_exited() -> void:
-	_unlock_after_play()
-
-func _unlock_after_play() -> void:
-	_current_ball = null
-	_play_locked = false
-	_charging = false
-	_charge_t = 0.0
-	_zoom_reset()
-	if _fx:
-		_fx.visible = false
-		_fx.emitting = false
-
-# ---------------------- Camera juice ----------------------
-func _apply_charge_zoom() -> void:
-	if _cam == null:
+# ---------------- HUMAN COOLDOWN ----------------
+func _start_human_cooldown() -> void:
+	if not input_enabled:
 		return
-	var mul = max(1.0, charge_zoom_in_mul)
-	var eased := _ease_out(_charge_t)
-	var target = _cam_zoom_base * lerp(1.0, mul, eased)
-	_cam.zoom = target
-
-func _zoom_reset() -> void:
-	if _cam == null:
+	_human_cooldown_active = true
+	if _human_cd_timer != null:
 		return
-	var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(_cam, "zoom", _cam_zoom_base, zoom_snap_time)
+	_human_cd_timer = get_tree().create_timer(max(0.01, human_cooldown_min))
+	_human_cd_timer.timeout.connect(func():
+		_human_cooldown_active = false
+		_human_cd_timer = null
+	)
 
-# ---------------------- FX drive ----------------------
-func _update_charge_fx() -> void:
+# ---------------- FX resolve & control ----------------
+func _resolve_fx() -> void:
+	_fx = null
+	if charge_fx_path != NodePath():
+		_fx = get_node_or_null(charge_fx_path)
+	if _fx == null and is_instance_valid(_hand):
+		_fx = _hand.get_node_or_null("PitchCharge")
+	if _fx == null and is_instance_valid(_hand):
+		for c in _hand.get_children():
+			if c is CPUParticles2D:
+				_fx = c
+				break
 	if _fx == null:
-		return
-	var p_split = clamp(phase_split, 0.05, 0.95)
-	var phase := 0
-	var level := 0.0
-	if _charge_t <= p_split:
-		phase = 0
-		level = clamp(_charge_t / p_split, 0.0, 1.0)
-	else:
-		phase = 1
-		level = clamp((_charge_t - p_split) / (1.0 - p_split), 0.0, 1.0)
-	_fx.set_level(level, phase)
+		for c in get_children():
+			if c is CPUParticles2D:
+				_fx = c
+				break
+	if _fx is CPUParticles2D:
+		var p := _fx as CPUParticles2D
+		if p.texture == null:
+			var img := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+			img.fill(Color(1,1,1,1))
+			p.texture = ImageTexture.create_from_image(img)
 
-# ---------------------- Math ----------------------
-func _ease_out(x: float) -> float:
-	var a = clamp(x, 0.0, 1.0)
-	return 1.0 - (1.0 - a) * (1.0 - a)
+func _fx_start() -> void:
+	if _fx == null: return
+	if _fx.has_method("start_charge"):
+		_fx.call("start_charge")
+	elif _fx is CPUParticles2D:
+		var p := _fx as CPUParticles2D
+		p.visible = true
+		p.one_shot = false
+		p.lifetime = 0.30
+		p.modulate = Color(1.0, 0.82, 0.15, 0.70)
+		p.amount = 12
+		p.spread = 180.0
+		p.emitting = false
+		p.emitting = true
+
+func _fx_set_level(phase: int, level: float) -> void:
+	if _fx == null: return
+	if _fx.has_method("set_level"):
+		_fx.call("set_level", level, phase)
+	elif _fx is CPUParticles2D:
+		var p := _fx as CPUParticles2D
+		level = clamp(level, 0.0, 1.0)
+		if phase == 0:
+			p.modulate = Color(1.0, 0.82, 0.15, 0.70).lerp(Color(1,1,0,1), level)
+			p.amount = int(lerp(12.0, 120.0, level))
+			p.spread = 180.0
+
+func _fx_release(power: float) -> void:
+	if _fx == null: return
+	if _fx.has_method("release_burst"):
+		_fx.call("release_burst", clamp(power, 0.0, 1.0))
+	elif _fx is CPUParticles2D:
+		var p := _fx as CPUParticles2D
+		p.one_shot = true
+		p.lifetime = 0.16
+		p.amount = 36
+		p.emitting = false
+		p.emitting = true
+		await get_tree().create_timer(0.12, true, true).timeout
+		_fx_stop()
+
+func _fx_stop() -> void:
+	if _fx is CPUParticles2D:
+		var p := _fx as CPUParticles2D
+		p.emitting = false
+		p.visible = false
+
+# ----------------- AI hooks (use same centered zoom/focus) -----------------
+func ai_begin_charge_zoom() -> void:
+	var focus := _hand if is_instance_valid(_hand) else self
+	if _cam and _cam.has_method("begin_charge_focus"):
+		_cam.call("begin_charge_focus", focus, false)
+	if _cam and _cam.has_method("zoom_to"):
+		_cam.call("zoom_to", charge_zoom_scale, zoom_in_time)
+
+func ai_begin_charge_fx() -> void:
+	_fx_start()
+
+func ai_set_charge_level(phase: int, level: float) -> void:
+	_fx_set_level(phase, level)
+
+func ai_pitch(power: float, accuracy: float, target_deg: float, steer_lr: float) -> void:
+	var p = clamp(power, 0.0, 1.0)
+	var acc = clamp(accuracy, 0.0, 1.0)
+	var aim_deg := target_deg
+	var speed = lerp(min_power_speed, max_power_speed, p)
+	var steer_deg = clamp(steer_lr, -1.0, 1.0) * steer_max_deg
+	var miss_deg = randf_range(-1.0, 1.0) * (1.0 - acc) * inaccuracy_max_deg
+	var final_deg = aim_deg + steer_deg + miss_deg
+
+	var b := _spawn_ball()
+	if b:
+		var origin: Vector2
+		if is_instance_valid(_hand):
+			origin = _hand.global_position
+		else:
+			origin = global_position
+		var dir := Vector2(sin(deg_to_rad(final_deg)), 1.0).normalized()
+		_safe_call_pitch_from(b, origin, dir, speed, acc, steer_lr)
+		b.add_to_group("balls")
+		pitched.emit(b)
+
+	_fx_release(p)
+	if _cam and _cam.has_method("zoom_to"):
+		_cam.call("zoom_to", 1.0, zoom_out_time)
+	if _cam and _cam.has_method("end_charge_focus"):
+		_cam.call("end_charge_focus", false)
+
+# ----------------- helpers -----------------
+func _safe_call_pitch_from(ball: Object, origin: Vector2, dir: Vector2, speed: float, acc: float, steer: float) -> void:
+	var argc := _get_method_argc(ball, "pitch_from")
+	if argc >= 5:
+		ball.call("pitch_from", origin, dir, speed, acc, steer)
+	elif argc == 4:
+		ball.call("pitch_from", origin, dir, speed, acc)
+	elif argc == 3:
+		ball.call("pitch_from", origin, dir, speed)
+	else:
+		if ball.has_method("set_velocity"):
+			ball.call("set_velocity", dir * speed)
+	if ball.has_method("set_accuracy"):
+		ball.call("set_accuracy", acc)
+	if ball.has_method("set_pitch_steer"):
+		ball.call("set_pitch_steer", steer)
+	if ball is Node:
+		(ball as Node).set_meta("pitch_accuracy", acc)
+		(ball as Node).set_meta("pitch_steer", steer)
+
+func _get_method_argc(obj: Object, name: String) -> int:
+	var list := obj.get_method_list()
+	for m in list:
+		var mname = m.get("name")
+		if typeof(mname) == TYPE_STRING and String(mname) == name:
+			var args = m.get("args")
+			if typeof(args) == TYPE_ARRAY:
+				return (args as Array).size()
+			return 0
+	return 0

@@ -1,107 +1,79 @@
-# res://entities/HomePlate.gd
 extends Node2D
 class_name HomePlate
 
 @export_group("Strike Zone")
-@export var zone_size: Vector2 = Vector2(18, 24)     # width x height in px
-@export var zone_offset: Vector2 = Vector2(0, -12)   # offset from this node (centered)
-@export var debug_draw_zone: bool = false
+@export var zone_size: Vector2 = Vector2(22, 30)     # width x height (px)
+@export var zone_offset: Vector2 = Vector2(0, -6)    # relative to node
+@export var plate_line_offset: float = 0.0           # y offset of the "cross plate" line
+@export var debug_draw: bool = true                  # <— toggle green box in Inspector
 
-@export_group("Detection")
-@export var judge_once_per_ball: bool = true
-
-# Optional sprite for plate art (not required)
-@onready var plate_sprite: Sprite2D = null
-
-# Track last positions and whether we've judged a ball already
-var _last_pos := {}          # Dictionary<int, Vector2>
-var _judged := {}            # Dictionary<int, bool>
+# Track per-ball last Y and whether we've already ruled it at the plate
+var _last_y := {}
+var _ruled := {}
 
 func _ready() -> void:
-	if has_node("Sprite"):
-		plate_sprite = $Sprite
+	add_to_group("home_plate")
+	set_physics_process(true)
 
 func _physics_process(_delta: float) -> void:
-	var rect := _zone_global_rect()
+	var plate_y := global_position.y + plate_line_offset
 
-	# Scan all active balls
 	for node in get_tree().get_nodes_in_group("balls"):
-		if node == null:
+		if node == null or not (node is Node2D):
 			continue
-		if not (node is Node2D):
+		var b := node as Node2D
+		# Skip if ball already batted or already ruled at the plate
+		if b.has_meta("batted") and b.get_meta("batted"):
 			continue
-		var ball := node as Node2D
-		var id := ball.get_instance_id()
-
-		# Skip if we already judged this ball (and we only judge once)
-		if judge_once_per_ball and _judged.has(id) and _judged[id]:
+		if _ruled.has(b.get_instance_id()):
 			continue
 
-		# If the ball was hit by the batter, ignore it for strike/ball
-		if ball.has_meta("batted") and ball.get_meta("batted") == true:
-			_last_pos.erase(id)
-			_judged.erase(id)
-			continue
+		var pos := b.global_position
+		var id := b.get_instance_id()
+		var had := _last_y.has(id)
+		var last: float = float(_last_y[id]) if had else pos.y
 
-		var pos: Vector2 = ball.global_position
-		var prev: Vector2 = pos
-		if _last_pos.has(id):
-			prev = _last_pos[id]
-		else:
-			_last_pos[id] = pos  # seed
+		# Detect crossing of the plate line from above to below (screen coords increase downward)
+		if had and last < plate_y and pos.y >= plate_y:
+			var zone_center := global_position + zone_offset
+			var half_w := zone_size.x * 0.5
+			var left_x := zone_center.x - half_w
+			var right_x := zone_center.x + half_w
 
-		var inside_now := rect.has_point(pos)
-		var inside_prev := rect.has_point(prev)
+			if pos.x >= left_x and pos.x <= right_x:
+				GameManager.call_strike()
+			else:
+				GameManager.call_ball()
 
-		# If the segment dipped into the zone at any point this frame -> STRIKE
-		if inside_now or inside_prev:
-			_mark_judged(id)
-			_call_hud_strike()
-			_last_pos[id] = pos
-			continue
+			_ruled[id] = true
+			# Pitch is over if untouched
+			GameManager.end_play()
 
-		# If we passed below the bottom of the zone this frame without entering -> BALL
-		var bottom_y := rect.position.y + rect.size.y
-		if prev.y <= bottom_y and pos.y > bottom_y:
-			_mark_judged(id)
-			_call_hud_ball()
-			_last_pos[id] = pos
-			continue
+		_last_y[id] = pos.y
 
-		_last_pos[id] = pos
+	# Cleanup dead ids
+	var to_erase: Array = []
+	for k in _last_y.keys():
+		if not is_instance_id_valid(k):
+			to_erase.append(k)
+	for k in to_erase:
+		_last_y.erase(k)
+		_ruled.erase(k)
 
-	if debug_draw_zone:
-		queue_redraw()  # Godot 4: use queue_redraw() instead of update()
-
-func _mark_judged(id: int) -> void:
-	if judge_once_per_ball:
-		_judged[id] = true
-
-func _zone_global_rect() -> Rect2:
-	# Centered rect at node + offset
-	var center := global_position + zone_offset
-	var tl := center - zone_size * 0.5
-	return Rect2(tl, zone_size)
+	if debug_draw:
+		queue_redraw()
 
 func _draw() -> void:
-	if not debug_draw_zone:
+	if not debug_draw:
 		return
-	var r := _zone_global_rect()
-	# Filled translucent zone
-	draw_rect(r, Color(0.2, 1.0, 0.2, 0.12), true)
-	# Outline (width = 1.0)
-	draw_rect(r, Color(0.2, 1.0, 0.2, 0.7), false, 1.0)
+	var zone_center := zone_offset
+	var rect := Rect2(zone_center - zone_size * 0.5, zone_size)
 
-# ---------------- HUD helpers ----------------
-func _hud() -> Node:
-	return get_tree().get_first_node_in_group("umpire_hud")
+	# translucent fill
+	draw_rect(rect, Color(0.2, 1.0, 0.2, 0.12), true)
+	# border
+	draw_rect(rect, Color(0.2, 1.0, 0.2, 0.8), false, 1.0)
 
-func _call_hud_strike() -> void:
-	var h := _hud()
-	if h and h.has_method("call_strike"):
-		h.call("call_strike")
-
-func _call_hud_ball() -> void:
-	var h := _hud()
-	if h and h.has_method("call_ball"):
-		h.call("call_ball")
+	# plate crossing line (for tuning where we “call” it)
+	var y := plate_line_offset
+	draw_line(Vector2(-40, y), Vector2(40, y), Color(1,1,1,0.4), 1.0, false)

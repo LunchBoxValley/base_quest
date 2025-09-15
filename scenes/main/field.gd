@@ -19,33 +19,33 @@ signal home_run
 @export var bottom_margin_px: float = 36.0
 
 @export_group("Diamond / Foul Geometry")
-@export var base_side_px: float = 140.0        # equal spacing: Home→1st and 1st→2nd etc.
-@export var foul_margin_px: float = 0.0        # leniency inside wedge
+@export var base_side_px: float = 140.0
+@export var foul_margin_px: float = 0.0
 
 @export_group("Debug & Bounds")
 @export var draw_debug: bool = true
-@export var world_bounds: Rect2 = Rect2(-96, -64, 512, 384)  # set in reconfigure_layout()
-@export var outfield_wall_y: float = 16.0                    # set in reconfigure_layout()
-@export var left_foul_pole: Vector2 = Vector2(48, 16)        # set in reconfigure_layout()
-@export var right_foul_pole: Vector2 = Vector2(272, 16)      # set in reconfigure_layout()
+@export var world_bounds: Rect2 = Rect2(-96, -64, 512, 384)
+@export var outfield_wall_y: float = 16.0
+@export var left_foul_pole: Vector2 = Vector2(48, 16)
+@export var right_foul_pole: Vector2 = Vector2(272, 16)
+
+@export_group("Juice")
+@export var hr_hitstop_sec: float = 1.6       # 1.5–2.0 sec
 
 var _plate: Node2D
 var _ball: Node2D = null
 var _tracking := false
+var _hr_fx_running := false
 
 func _ready() -> void:
 	_plate = get_node_or_null(home_plate_path)
 	add_to_group("field_judge")
 	reconfigure_layout()
+	call_deferred("reconfigure_layout")
 	set_physics_process(true)
-	queue_redraw()
+	if draw_debug:
+		queue_redraw()
 
-func get_world_bounds() -> Rect2:
-	return world_bounds
-
-# ----------------------------------------------------------
-# Auto compute camera bounds, HR line, foul poles, and place bases
-# ----------------------------------------------------------
 func reconfigure_layout() -> void:
 	if _plate == null:
 		push_warning("[FieldJudge] home_plate_path is not set; cannot reconfigure.")
@@ -55,27 +55,31 @@ func reconfigure_layout() -> void:
 	var w := desired_field_size.x
 	var h := desired_field_size.y
 
-	# Keep Home where it is; put the larger world rect around it,
-	# with Home sitting bottom_margin_px above the world bottom.
 	var left := home.x - w * 0.5
 	var top  := home.y - (h - bottom_margin_px)
 	world_bounds = Rect2(left, top, w, h)
 
-	# HR line near the top, and foul poles at that line with side margins
 	outfield_wall_y = world_bounds.position.y + top_margin_px
 	left_foul_pole  = Vector2(world_bounds.position.x + side_margin_px, outfield_wall_y)
 	right_foul_pole = Vector2(world_bounds.position.x + world_bounds.size.x - side_margin_px, outfield_wall_y)
 
-	# Unit directions along each foul ray (Home→3rd on the left, Home→1st on the right)
-	var dir_left  := (left_foul_pole  - home).normalized()
-	var dir_right := (right_foul_pole - home).normalized()
-	var bisector  := (dir_left + dir_right)
+	var dir_left  := (left_foul_pole  - home)
+	var dir_right := (right_foul_pole - home)
+	if dir_left.length() > 0.0001:
+		dir_left = dir_left.normalized()
+	else:
+		dir_left = Vector2(-0.7, -0.7).normalized()
+	if dir_right.length() > 0.0001:
+		dir_right = dir_right.normalized()
+	else:
+		dir_right = Vector2(0.7, -0.7).normalized()
+
+	var bisector := dir_left + dir_right
 	if bisector.length() > 0.0001:
 		bisector = bisector.normalized()
 	else:
-		bisector = Vector2(0, -1) # fallback straight up
+		bisector = Vector2(0, -1)
 
-	# Place bases: 1st & 3rd at base_side_px along each ray; 2nd at √2 * base_side_px along bisector
 	var first_pos  := home + dir_right * base_side_px
 	var third_pos  := home + dir_left  * base_side_px
 	var second_pos := home + bisector  * base_side_px * sqrt(2.0)
@@ -83,13 +87,16 @@ func reconfigure_layout() -> void:
 	var first  := get_node_or_null(first_base_path)  as Node2D
 	var second := get_node_or_null(second_base_path) as Node2D
 	var third  := get_node_or_null(third_base_path)  as Node2D
-	if first:  first.global_position  = first_pos
-	if second: second.global_position = second_pos
-	if third:  third.global_position  = third_pos
+	if first:
+		first.global_position  = first_pos
+	if second:
+		second.global_position = second_pos
+	if third:
+		third.global_position  = third_pos
 
-# ----------------------------------------------------------
-# Ball tracking and calls (fair / foul / HR)
-# ----------------------------------------------------------
+	if draw_debug:
+		queue_redraw()
+
 func track_batted_ball(ball: Node2D) -> void:
 	_ball = ball
 	_tracking = is_instance_valid(_ball)
@@ -106,77 +113,41 @@ func _physics_process(_delta: float) -> void:
 	var p := _plate.global_position
 	var pos := _ball.global_position
 
-	# stop if ball leaves the world (safety)
-	if not world_bounds.has_point(pos):
-		_end_tracking()
-		return
-
-	# X positions where each foul line sits at this Y
+	# Foul-line X at this Y
 	var xl := _line_x_at_y(p, left_foul_pole, pos.y)
 	var xr := _line_x_at_y(p, right_foul_pole, pos.y)
 	if xl > xr:
 		var t := xl; xl = xr; xr = t
-
 	xl -= foul_margin_px
 	xr += foul_margin_px
 
-	# Home run: crosses the wall while between the foul lines
+	# HR first
 	if pos.y <= outfield_wall_y and pos.x >= xl and pos.x <= xr:
-		home_run.emit()
-		_call_hud_home_run()
-		_apply_hr_juice()             # << bring back the time stop & pan
-		_mark_ball_out_of_play()      # camera will hold then ease back
-		_end_tracking()
+		if not (_ball.has_meta("hr_announced") and _ball.get_meta("hr_announced")):
+			_ball.set_meta("hr_announced", true)
+			GameManager.call_hit(true)     # HUD HR strobe
+			_home_run_juice()              # long pause-based freeze + strobe, with watchdog
+		_end_play()
 		return
 
-	# Foul: outside the fair wedge
+	# Foul
 	if pos.x < xl or pos.x > xr:
-		foul_ball.emit()
-		_call_hud_foul()
-		_mark_ball_out_of_play()
-		_end_tracking()
+		if not (_ball.has_meta("ruled") and _ball.get_meta("ruled")):
+			_ball.set_meta("ruled", true)
+			GameManager.call_foul()
+		_end_play()
 		return
 
-func _apply_hr_juice() -> void:
-	# 1) quick subtle shake
+	# Safety: if ball leaves world
+	if not world_bounds.has_point(pos):
+		_end_play()
+		return
+
+func _end_play() -> void:
 	var cam := get_tree().get_first_node_in_group("game_camera")
-	if cam and cam.has_method("kick"):
-		cam.kick(2.0, 0.10)
-
-	# 2) after the shake, do hitstop + subtle pan-out
-	var tmr := Timer.new()
-	tmr.one_shot = true
-	tmr.wait_time = 0.12
-	tmr.ignore_time_scale = true
-	add_child(tmr)
-	tmr.timeout.connect(func():
-		# Prefer Juice singleton for time stop if available
-		var juice := get_node_or_null("/root/Juice")
-		if juice and juice.has_method("hitstop"):
-			juice.hitstop(0.07)
-		elif cam and cam.has_method("hitstop"):
-			cam.hitstop(0.07)
-
-		if cam and cam.has_method("hr_pan_out_and_back"):
-			cam.hr_pan_out_and_back(0.95, 0.25, 0.18)
-		tmr.queue_free()
-	)
-	tmr.start()
-
-func _mark_ball_out_of_play() -> void:
-	if _ball == null:
-		return
-	# Prefer unified camera flow: have the ball emit out_of_play so the camera
-	# pauses at ball pos then eases back, per our GameCamera contract.
-	if _ball.has_signal("out_of_play"):
-		_ball.emit_signal("out_of_play")
-	else:
-		# Fallback: steer camera to pitcher framing immediately.
-		var cam := get_tree().get_first_node_in_group("game_camera")
-		if cam and cam.has_method("focus_default"):
-			cam.call("focus_default", false)
-
-func _end_tracking() -> void:
+	if cam and cam.has_method("follow_default"):
+		cam.follow_default()
+	GameManager.end_play()
 	_tracking = false
 	_ball = null
 
@@ -186,6 +157,46 @@ func _line_x_at_y(a: Vector2, b: Vector2, y: float) -> float:
 		return a.x
 	var t := (a.y - y) / dy
 	return a.x + (b.x - a.x) * t
+
+# ---------------- HR Juice (pause-only, safe watchdog) ----------------
+func _home_run_juice() -> void:
+	if _hr_fx_running:
+		return
+	_hr_fx_running = true
+	call_deferred("_hr_fx_coroutine")
+
+func _hr_fx_coroutine() -> void:
+	var cam := get_tree().get_first_node_in_group("game_camera")
+	if cam and cam.has_method("kick"):
+		cam.kick(2.0, 0.10)
+
+	# HUD/Screen juice if available
+	var juice := get_node_or_null("/root/Juice")
+	if juice:
+		if juice.has_method("flash"):
+			juice.call("flash", Color(1,1,1,0.90), 0.20)
+		if juice.has_method("strobe"):
+			juice.call("strobe", [Color(1,1,1,0.90), Color(1,0.2,0.2,0.90)], hr_hitstop_sec * 0.6, 0.10)
+
+	# Use SceneTree pause (not time_scale) + ignore_time_scale timer
+	var tree := get_tree()
+	var prev_paused := tree.paused
+	tree.paused = true
+
+	var t := tree.create_timer(hr_hitstop_sec, true, true) # process_always + ignore_time_scale
+	await t.timeout
+
+	tree.paused = prev_paused
+
+	# Watchdog: guarantee resume even if something else interferes
+	var guard := tree.create_timer(hr_hitstop_sec + 0.3, true, true)
+	await guard.timeout
+	if tree.paused:
+		tree.paused = false
+	if Engine.time_scale < 0.95:
+		Engine.time_scale = 1.0
+
+	_hr_fx_running = false
 
 func _draw() -> void:
 	if not draw_debug or _plate == null:
@@ -199,12 +210,11 @@ func _draw() -> void:
 	# HR line
 	var wl := Vector2(world_bounds.position.x, outfield_wall_y)
 	var wr := Vector2(world_bounds.position.x + world_bounds.size.x, outfield_wall_y)
-	draw_line(to_local(wl), to_local(wr), Color(0.3,1,0.5,0.6), 1.0, false)
+	draw_line(to_local(wl), to_local(wr), Color(0.3,1,0.5,0.7), 1.0, false)
 
-	# Bounds
-	draw_rect(Rect2(to_local(world_bounds.position), world_bounds.size), Color(1,1,1,0.12), false)
+	# Bounds + diamond
+	draw_rect(Rect2(to_local(world_bounds.position), world_bounds.size), Color(1,1,1,0.10), false)
 
-	# Diamond (Home→1st→2nd→3rd→Home)
 	var first  := get_node_or_null(first_base_path)  as Node2D
 	var second := get_node_or_null(second_base_path) as Node2D
 	var third  := get_node_or_null(third_base_path)  as Node2D
@@ -217,20 +227,6 @@ func _draw() -> void:
 		draw_line(F, S, Color(1,1,1,0.6), 1.0, false)
 		draw_line(S, T, Color(1,1,1,0.6), 1.0, false)
 		draw_line(T, H, Color(1,1,1,0.6), 1.0, false)
-		draw_circle(F, 3.0, Color(0.8,1,0.8,0.8))
-		draw_circle(S, 3.0, Color(0.8,0.8,1,0.8))
-		draw_circle(T, 3.0, Color(1,0.8,0.8,0.8))
-
-# ---------------- HUD helpers ----------------
-func _hud() -> Node:
-	return get_tree().get_first_node_in_group("umpire_hud")
-
-func _call_hud_foul() -> void:
-	var h := _hud()
-	if h and h.has_method("call_foul"):
-		h.call("call_foul")
-
-func _call_hud_home_run() -> void:
-	var h := _hud()
-	if h and h.has_method("call_home_run"):
-		h.call("call_home_run")
+		draw_circle(F, 3.0, Color(0.8,1,0.8,0.9))
+		draw_circle(S, 3.0, Color(0.8,0.8,1,0.9))
+		draw_circle(T, 3.0, Color(1,0.8,0.8,0.9))

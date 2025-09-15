@@ -18,6 +18,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Juice="*res://autoload/game_juice.gd"
+GameManager="*res://autoload/GameManager.gd"
 
 [display]
 
@@ -35,7 +36,8 @@ folder_colors={
 "res://assets/": "orange",
 "res://autoload/": "gray",
 "res://entities/": "blue",
-"res://scenes/": "green"
+"res://scenes/": "green",
+"res://systems/": "red"
 }
 
 [input]
