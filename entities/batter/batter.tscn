@@ -1,7 +1,8 @@
-[gd_scene load_steps=12 format=3 uid="uid://cmxbvj2cl018o"]
+[gd_scene load_steps=13 format=3 uid="uid://cmxbvj2cl018o"]
 
 [ext_resource type="Script" uid="uid://dv0y5gifgt65s" path="res://entities/batter/batter.gd" id="1_v8vae"]
 [ext_resource type="Texture2D" uid="uid://x7w2370dnhh" path="res://assets/sprites/Minifantasy_NPCsCarpenterIdle.png" id="2_mreuv"]
+[ext_resource type="Script" uid="uid://cnen8l3843ru7" path="res://entities/batter/bat_swoosh.gd" id="3_mreuv"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_hespc"]
 atlas = ExtResource("2_mreuv")
@@ -74,3 +75,7 @@ script = ExtResource("1_v8vae")
 sprite_frames = SubResource("SpriteFrames_r4whh")
 animation = &"idle"
 autoplay = "idle"
+
+[node name="BatSwoosh" type="Node2D" parent="."]
+position = Vector2(3, 0)
+script = ExtResource("3_mreuv")

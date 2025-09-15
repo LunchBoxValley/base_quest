@@ -114,6 +114,8 @@ func ai_swing_after(seconds: float) -> void:
 # ---------------------- Contact & outcome ----------------------
 func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	ball.set_meta("batted", true)     # mark batted so plate won't call B/S
+	if has_node("BatSwoosh"):
+		$BatSwoosh.fire()
 
 	var phase = 1.0 - clamp(_swing_t / max(0.0001, swing_window), 0.0, 1.0)
 	var offset = phase - sweet_spot_phase

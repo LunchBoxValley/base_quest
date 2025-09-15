@@ -648,6 +648,7 @@ tile_set = SubResource("TileSet_blune")
 script = ExtResource("1_k2fmo")
 default_target_path = NodePath("../Entities/Pitcher")
 default_offset = Vector2(0, 30)
+post_play_hold_time = 0.6
 
 [node name="HomePlate" parent="." instance=ExtResource("2_k2fmo")]
 position = Vector2(160, 150)
@@ -667,7 +668,6 @@ z_index = 40
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
-home_plate_path = NodePath("../../HomePlate")
 
 [node name="Base" parent="Entities" instance=ExtResource("6_b1x3f")]
 position = Vector2(267, 40)
