@@ -668,8 +668,7 @@ charge_fx_path = NodePath("Hand/PitchCharge")
 z_index = 40
 
 [node name="Fielder" parent="Entities" instance=ExtResource("10_7smn1")]
-position = Vector2(119, 24)
-home_marker_path = NodePath("../Left_center")
+position = Vector2(113, 31)
 field_path = NodePath("../../Field")
 pitcher_path = NodePath("../Pitcher")
 
@@ -698,7 +697,7 @@ position = Vector2(148, 2)
 position = Vector2(98, 55)
 
 [node name="Left_center" type="Marker2D" parent="Entities"]
-position = Vector2(103, -13)
+position = Vector2(122, 27)
 
 [node name="Right_center" type="Marker2D" parent="Entities"]
 position = Vector2(242, -19)

@@ -68,7 +68,7 @@ animations = [{
 }]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_ylxh0"]
-size = Vector2(7, 2)
+size = Vector2(4, 2)
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_ig37m"]
 radius = 2.0
@@ -82,13 +82,14 @@ animation = &"idle"
 autoplay = "idle"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(-1, 2)
+position = Vector2(0, 1)
 shape = SubResource("RectangleShape2D_ylxh0")
 
 [node name="Glove" type="Area2D" parent="."]
+position = Vector2(0, 2)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Glove"]
-position = Vector2(4, -1)
+position = Vector2(0, 2)
 shape = SubResource("CircleShape2D_ig37m")
 
 [node name="Nav" type="NavigationAgent2D" parent="."]

@@ -44,10 +44,13 @@ var _state: int = S_IDLE
 var _move_target: Vector2 = Vector2.ZERO
 
 func _ready() -> void:
-	_spawn_pos = global_position
-
+	# Resolve refs
 	if home_marker_path != NodePath():
 		_home_marker = get_node_or_null(home_marker_path) as Node2D
+	if _home_marker != null:
+		_spawn_pos = _home_marker.global_position
+	else:
+		_spawn_pos = global_position
 
 	if field_path != NodePath():
 		_field = get_node_or_null(field_path)
@@ -88,20 +91,38 @@ func _physics_process(delta: float) -> void:
 # -------------------- AI Core --------------------
 
 func _on_decide() -> void:
+	# Gate fielding chase until AFTER bat–ball contact.
+	# We rely on GameManager.play_active (set true on call_hit()) and also avoid chasing when the Ball's last_delivery is "pitch".
+	var live := GameManager.play_active
+	var pitched_ball := false
+	if is_instance_valid(_ball) and _ball.has_method("last_delivery"):
+		pitched_ball = (_ball.last_delivery() == "pitch")
 	match _state:
 		S_IDLE:
-			if _acquire_ball():
+			# Only begin chasing when play is live and the ball is not in a pitch delivery state.
+			if live and _acquire_ball() and not pitched_ball:
 				_enter_state(S_SEEK_BALL)
 			else:
 				_set_target(_get_home_pos())
 
 		S_SEEK_BALL:
+			# If play ended (foul/out/HR), stop chasing.
+			if not live:
+				_enter_state(S_RETURN)
+				return
+
+			# If we lost the ball reference, try reacquire; otherwise return.
 			if not is_instance_valid(_ball):
 				if _acquire_ball():
 					pass
 				else:
 					_enter_state(S_RETURN)
 					return
+
+			# Do not chase a pitched ball (pre-contact).
+			if _ball.has_method("last_delivery") and _ball.last_delivery() == "pitch":
+				_enter_state(S_RETURN)
+				return
 
 			_set_target(_ball.global_position)
 
@@ -171,52 +192,32 @@ func _acquire_ball() -> bool:
 func _pickup_ball(ball: Ball) -> void:
 	if not is_instance_valid(ball):
 		return
+	_has_ball = true
 	_ball = ball
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
-	_has_ball = true
+	_ball.global_position = _glove.global_position
 
 func _choose_throw_target() -> Node2D:
-	var candidates: Array = []
-	if _field:
-		var n: Node2D = null
-		n = _get_from_field("first_base_path");  if n: candidates.append(n)
-		n = _get_from_field("second_base_path"); if n: candidates.append(n)
-		n = _get_from_field("third_base_path");  if n: candidates.append(n)
-		n = _get_from_field("home_plate_path");  if n: candidates.append(n)
-	if _pitcher:
-		candidates.append(_pitcher)
-
-	var best: Node2D = null
-	var best_d := 1e9
-	for c in candidates:
-		var pos := (c as Node2D).global_position
-		var d := global_position.distance_to(pos)
-		if d < best_d:
-			best_d = d
-			best = c
-	return best
-
-func _get_from_field(prop: String) -> Node2D:
-	if _field == null:
-		return null
-	if not _field.has_method("get"):
-		return null
-	var np := _field.get(prop) as NodePath
-	if np == null or np == NodePath():
-		return null
-	return _field.get_node_or_null(np) as Node2D
+	# Very simple heuristic placeholder. You can replace with FieldJudge advice.
+	if _field and _field.has_method("choose_force_base"):
+		return _field.choose_force_base(team_id)
+	# Fallback: throw to first base by default.
+	var root := get_tree().get_current_scene()
+	var b1 := root.get_node_or_null(^"Base1") as Node2D
+	return b1 if b1 != null else root
 
 func _do_throw_to(target: Node2D) -> void:
-	if not _has_ball or not is_instance_valid(_ball):
+	if not is_instance_valid(_ball) or not _has_ball:
 		return
 
-	var dir: Vector2
-	var spd: float
-	var label: String
+	var dir := Vector2.DOWN
+	var spd := throw_speed_min
+	var label := "liner"
 
-	if target == null:
+	# If FieldJudge gave us a suggested angle/speed, you might set it here.
+	if target == _pitcher:
 		dir = Vector2.DOWN
-		spd = (throw_speed_min + throw_speed_max) * 0.5
+		spd = throw_speed_min
 		label = "liner"
 	else:
 		var vec := target.global_position - global_position
