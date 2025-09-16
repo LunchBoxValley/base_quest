@@ -98,7 +98,10 @@ var _hit_boost_t: float = 0.0
 
 func _ready() -> void:
 	visible = false
+	
+	
 	add_to_group("balls")
+	
 	if trail:
 		trail.top_level = true
 		trail.default_color = Color(1, 1, 1, 0.6)
