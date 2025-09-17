@@ -636,7 +636,7 @@ batter_path = NodePath("../Entities/Batter")
 [node name="Field" type="Node2D" parent="."]
 script = ExtResource("1_hujxm")
 home_plate_path = NodePath("../HomePlate")
-first_base_path = NodePath("../Entities/Base")
+first_base_path = NodePath("../Entities/Base1")
 second_base_path = NodePath("../Entities/Base2")
 third_base_path = NodePath("../Entities/Base3")
 
@@ -674,8 +674,9 @@ pitcher_path = NodePath("../Pitcher")
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
+spray_random = 0.25
 
-[node name="Base" parent="Entities" instance=ExtResource("6_b1x3f")]
+[node name="Base1" parent="Entities" instance=ExtResource("6_b1x3f")]
 position = Vector2(267, 40)
 
 [node name="Base2" parent="Entities" instance=ExtResource("6_b1x3f")]
