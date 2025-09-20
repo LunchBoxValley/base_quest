@@ -62,6 +62,11 @@ signal out_of_play
 @export var shadow_dir: Vector2 = Vector2(-1.0, 1.0) # ← light from upper-right → shadow down-left
 @export var shadow_base_offset: Vector2 = Vector2(-3.0, 2.0) # sits slightly left & behind even at h=0
 
+# --- Optional Sweep (ShapeCast2D) ---
+@export_group("Sweep (optional)")
+@export var sweep_enable_speed: float = 220.0   # enable Sweep above this speed
+@export var sweep_epsilon: float = 0.5          # stop this far before first hit
+
 # --- State ---
 var _velocity: Vector2 = Vector2.ZERO
 var _active: bool = false
@@ -91,6 +96,7 @@ var _dropped: bool = false
 @onready var sprite: Sprite2D = $Sprite
 @onready var trail: Line2D = $Trail
 @onready var shadow := $Shadow    # BallShadow (optional child)
+@onready var _sweep: ShapeCast2D = get_node_or_null("Sweep")  # OPTIONAL
 
 var _spin_t: float = 0.0
 var _spin_active: bool = false
@@ -98,10 +104,7 @@ var _hit_boost_t: float = 0.0
 
 func _ready() -> void:
 	visible = false
-	
-	
 	add_to_group("balls")
-	
 	if trail:
 		trail.top_level = true
 		trail.default_color = Color(1, 1, 1, 0.6)
@@ -110,6 +113,8 @@ func _ready() -> void:
 		shadow.z_index = -1
 		shadow.scale = Vector2(shadow_width_scale, shadow_height_scale)
 		shadow.position = shadow_base_offset + Vector2(0, shadow_y_offset)
+	if _sweep:
+		_sweep.enabled = false
 
 func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom_speed: float = -1.0) -> void:
 	_reset_state()
@@ -127,11 +132,23 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 		trail.clear_points()
 		trail.add_point(global_position)
 
-# meta can include: {"type": "grounder"/"liner"/"fly"/"blast", "angle_deg": float}
+# meta can include: {"type": "grounder"/"liner"/"fly"/"blast", "angle_deg": float, "delivery": "hit"/"throw"/"pitch"}
 func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> void:
 	_reset_state()
-	_is_hit = true
-	_delivery = "hit"
+
+	# RESPECT meta.delivery (default to "hit")
+	var delivery := String(meta.get("delivery", "hit")).to_lower()
+	match delivery:
+		"throw":
+			_delivery = "throw"
+			_is_hit = false
+		"pitch":
+			_delivery = "pitch"
+			_is_hit = false
+		_:
+			_delivery = "hit"
+			_is_hit = true
+
 	_start_pos = global_position
 	_hit_boost_t = hit_depth_boost_time
 	_velocity = direction.normalized() * new_speed
@@ -216,7 +233,28 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var step := _velocity * delta
-	global_position += step
+
+	# OPTIONAL: swept motion if Sweep exists and we're moving fast
+	if _sweep and _velocity.length() >= sweep_enable_speed and step.length() > 0.0:
+		_sweep.enabled = true
+		_sweep.target_position = step
+		_sweep.force_shapecast_update()
+		if _sweep.is_colliding():
+			var p := _sweep.get_collision_point(0)
+			var to_hit := p - global_position
+			var d := to_hit.length()
+			var move_vec := step
+			if d < step.length():
+				var safe_d = max(0.0, d - sweep_epsilon)
+				move_vec = to_hit.normalized() * safe_d if safe_d > 0.0 else Vector2.ZERO
+			global_position += move_vec
+		else:
+			global_position += step
+	else:
+		if _sweep:
+			_sweep.enabled = false
+		global_position += step
+
 	_distance_traveled += step.length()
 
 	# Late outfield drop for air balls

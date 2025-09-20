@@ -1,4 +1,4 @@
-[gd_scene load_steps=6 format=3 uid="uid://dfdc3plqb0gjy"]
+[gd_scene load_steps=7 format=3 uid="uid://dfdc3plqb0gjy"]
 
 [ext_resource type="Script" uid="uid://bcwqse17snrhp" path="res://entities/ball/ball.gd" id="1_61umk"]
 [ext_resource type="Texture2D" uid="uid://pgj5nf7q26x0" path="res://assets/sprites/ball.png" id="2_jyt08"]
@@ -19,6 +19,8 @@ animations = [{
 "speed": 5.0
 }]
 
+[sub_resource type="CircleShape2D" id="CircleShape2D_we1t7"]
+
 [node name="Ball" type="Node2D"]
 z_index = 50
 script = ExtResource("1_61umk")
@@ -38,3 +40,7 @@ animation = &"spin"
 autoplay = "spin"
 
 [node name="Trail" type="Line2D" parent="."]
+
+[node name="Sweep" type="ShapeCast2D" parent="."]
+scale = Vector2(0.15, 0.15)
+shape = SubResource("CircleShape2D_we1t7")

@@ -3,13 +3,13 @@ class_name Fielder
 
 @export_group("Team / Placement")
 @export var team_id: int = 1
-@export var home_marker_path: NodePath        # <- new: point to a Marker2D
+@export var home_marker_path: NodePath        # <- point to a Marker2D near this fielder’s post
 var _home_marker: Node2D = null
 var _spawn_pos: Vector2 = Vector2.ZERO        # fallback if no marker set
 
 @export_group("Scene Paths")
-@export var field_path: NodePath              # -> FieldJudge (node named "Field")
-@export var pitcher_path: NodePath            # -> Entities/Pitcher
+@export var field_path: NodePath              # -> FieldJudge / Field node (optional)
+@export var pitcher_path: NodePath            # -> Entities/Pitcher (for fallback throws)
 
 @export_group("Movement")
 @export var move_speed: float = 85.0
@@ -60,7 +60,8 @@ func _ready() -> void:
 
 	_timer.wait_time = max(0.06, decision_interval_sec)
 	_timer.one_shot = false
-	_timer.timeout.connect(_on_decide)
+	if not _timer.timeout.is_connected(_on_decide):
+		_timer.timeout.connect(_on_decide)
 	_timer.start()
 
 	_enter_state(S_IDLE)
@@ -91,36 +92,30 @@ func _physics_process(delta: float) -> void:
 # -------------------- AI Core --------------------
 
 func _on_decide() -> void:
-	# Gate fielding chase until AFTER bat–ball contact.
-	# We rely on GameManager.play_active (set true on call_hit()) and also avoid chasing when the Ball's last_delivery is "pitch".
+	# Keep ball ref fresh
+	if (_ball == null) or (not is_instance_valid(_ball)):
+		_acquire_ball()
+
 	var live := GameManager.play_active
-	var pitched_ball := false
+	var is_hit := false
 	if is_instance_valid(_ball) and _ball.has_method("last_delivery"):
-		pitched_ball = (_ball.last_delivery() == "pitch")
+		is_hit = String(_ball.last_delivery()).to_lower() == "hit"
+
 	match _state:
 		S_IDLE:
-			# Only begin chasing when play is live and the ball is not in a pitch delivery state.
-			if live and _acquire_ball() and not pitched_ball:
+			# Only begin chasing **live hits**
+			if live and is_hit and _acquire_ball():
 				_enter_state(S_SEEK_BALL)
 			else:
 				_set_target(_get_home_pos())
 
 		S_SEEK_BALL:
-			# If play ended (foul/out/HR), stop chasing.
+			# Stop if play ended
 			if not live:
 				_enter_state(S_RETURN)
 				return
-
-			# If we lost the ball reference, try reacquire; otherwise return.
-			if not is_instance_valid(_ball):
-				if _acquire_ball():
-					pass
-				else:
-					_enter_state(S_RETURN)
-					return
-
-			# Do not chase a pitched ball (pre-contact).
-			if _ball.has_method("last_delivery") and _ball.last_delivery() == "pitch":
+			# Stop if the ball is no longer a **hit** (e.g. it became a throw)
+			if not is_instance_valid(_ball) or not (_ball.has_method("last_delivery") and String(_ball.last_delivery()).to_lower() == "hit"):
 				_enter_state(S_RETURN)
 				return
 
@@ -170,7 +165,7 @@ func _enter_state(s: int) -> void:
 
 func _set_target(p: Vector2) -> void:
 	_move_target = p
-	# Future: use _nav path. v0 moves directly.
+	# (Nav pathing hookup can go here later)
 
 func _acquire_ball() -> bool:
 	if is_instance_valid(_ball):
@@ -198,12 +193,13 @@ func _pickup_ball(ball: Ball) -> void:
 	_ball.global_position = _glove.global_position
 
 func _choose_throw_target() -> Node2D:
-	# Very simple heuristic placeholder. You can replace with FieldJudge advice.
+	# If FieldJudge provides advice, prefer it
 	if _field and _field.has_method("choose_force_base"):
 		return _field.choose_force_base(team_id)
-	# Fallback: throw to first base by default.
+
+	# Fallback: throw to first base by default (use NodePath in 4.x)
 	var root := get_tree().get_current_scene()
-	var b1 := root.get_node_or_null(^"Base1") as Node2D
+	var b1 := root.get_node_or_null(NodePath("Base1")) as Node2D
 	return b1 if b1 != null else root
 
 func _do_throw_to(target: Node2D) -> void:
@@ -214,7 +210,6 @@ func _do_throw_to(target: Node2D) -> void:
 	var spd := throw_speed_min
 	var label := "liner"
 
-	# If FieldJudge gave us a suggested angle/speed, you might set it here.
 	if target == _pitcher:
 		dir = Vector2.DOWN
 		spd = throw_speed_min
@@ -232,12 +227,15 @@ func _do_throw_to(target: Node2D) -> void:
 		if dist >= 160.0:
 			label = "fly"
 
-	_release_and_deflect(dir, spd, {"type": label})
+	# IMPORTANT: pass meta and then tag the ball as a throw, so other fielders won't chase it
+	_release_and_deflect(dir, spd, {"type": label, "delivery":"throw"})
 
 func _release_and_deflect(dir: Vector2, spd: float, meta: Dictionary) -> void:
 	_ball.process_mode = Node.PROCESS_MODE_INHERIT
 	_ball.global_position = _glove.global_position + dir * 2.0
 	_ball.deflect(dir, spd, meta)
+	if _ball.has_method("mark_thrown"):
+		_ball.mark_thrown()  # ensure last_delivery() reports "throw" even if deflect() overwrote it
 	_has_ball = false
 	_ball = null
 
