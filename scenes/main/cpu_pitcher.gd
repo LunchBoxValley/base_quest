@@ -7,11 +7,11 @@ class_name CpuPitcher
 @export var max_cooldown: float = 8.0
 
 # AI tendencies
-@export var power_range: Vector2 = Vector2(0.55, 0.95)    # 0..1
+@export var power_range: Vector2 = Vector2(0.55, 0.95)   # 0..1
 @export var accuracy_range: Vector2 = Vector2(0.55, 0.95) # 0..1
 @export var aim_center_deg: float = 0.0
 @export var aim_spread_deg: float = 10.0
-@export var steer_variation: float = 0.10                  # -0.1..+0.1
+@export var steer_variation: float = 0.10  # -0.1..+0.1
 
 # Charge animation pace (simulated "hold")
 @export var min_charge_time: float = 0.80
@@ -31,7 +31,7 @@ func _ready() -> void:
 
 func activate() -> void:
 	_active = true
-	_schedule_next_pitch(true)  # will be near-immediate with Attempt A4
+	_schedule_next_pitch(true) # near-immediate on activation
 
 func deactivate() -> void:
 	_active = false
@@ -39,11 +39,15 @@ func deactivate() -> void:
 	_stop_fx()
 
 func kick_now() -> void:
-	# Public, immediate “do a pitch now” used by GameDirector to prevent long initial waits
-	if not _active: return
-	if GameManager.outs >= 3: return
-	if GameManager.play_active: return
-	if _any_ball_exists(): return
+	# Public, immediate “do a pitch now”—prevents long initial waits
+	if not _active:
+		return
+	if GameManager.outs >= 3:
+		return
+	if GameManager.play_active:
+		return
+	if _any_ball_exists():
+		return
 	_begin_ai_pitch()
 
 func _process(delta: float) -> void:
@@ -72,8 +76,9 @@ func _on_outs_changed(_outs: int) -> void:
 		_schedule_next_pitch()
 
 func _on_play_state_changed(active: bool) -> void:
+	# Nudge: when a play ENDS, rearm almost immediately.
 	if _active and not active and GameManager.outs < 3:
-		_schedule_next_pitch()
+		_schedule_next_pitch(true)  # ← change from previous: force quick re-arm
 
 func _schedule_next_pitch(force: bool=false) -> void:
 	if not _active:
@@ -84,12 +89,10 @@ func _schedule_next_pitch(force: bool=false) -> void:
 		return
 	if _timer and _timer.time_left > 0.0:
 		return
-
 	var wait := randf_range(min_cooldown, max_cooldown)
-	# Attempt A4: when “force” is true (e.g., inning just started), pitch almost immediately
+	# When “force” is true (e.g., inning started or play just ended), pitch almost immediately
 	if force:
 		wait = 0.15
-
 	_timer = get_tree().create_timer(wait)
 	_timer.timeout.connect(_begin_ai_pitch)
 
@@ -97,7 +100,7 @@ func _clear_timer() -> void:
 	_timer = null
 
 func _any_ball_exists() -> bool:
-	# cheap: group “balls” or common name
+	# Cheap check: use group “balls” if present, else name-based find.
 	if get_tree().get_first_node_in_group("balls") != null:
 		return true
 	var n := get_tree().get_root().find_child("Ball", true, false)

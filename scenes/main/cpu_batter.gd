@@ -1,209 +1,248 @@
+# scenes/main/cpu_batter.gd — Attempt H4 (robust plate line + earlier lead + emergency swing)
 extends Node
 class_name CpuBatter
 
 @export var batter_path: NodePath
 @export var home_plate_path: NodePath
-
-# Group the Ball belongs to (your project uses "balls")
 @export var ball_group_name: String = "balls"
 
-@export_group("Difficulty / Personality")
+@export_group("Discipline / Personality")
 @export_range(0.0, 1.0, 0.01) var discipline: float = 0.65
 @export_range(0.0, 1.0, 0.01) var chase_rate: float = 0.25
-@export_range(0.0, 1.0, 0.01) var power_bias: float = 0.35
 
-@export_group("Timing (seconds / ms)")
-@export var min_reaction_s: float = 0.12       # won't swing if ETA < this
-@export var swing_lead_ms: int = 90            # start swing this many ms before plate-cross
-@export var timing_error_ms: int = 80          # +/- jitter added to lead time
+@export_group("Timing")
+@export var min_reaction_s: float = 0.06     # allow very fast heaters
+@export var swing_lead_ms: int = 130         # start swing BEFORE ETA (earlier than prior)
+@export var timing_error_ms: int = 50        # less jitter makes cleaner contact
+@export var eta_max_s: float = 0.65          # ignore wacky early/late predictions
+@export var min_downward_vy: float = 1.0     # require slight downward motion
 
-@export_group("Aim / Slots (px)")
-@export var aim_error_px: float = 6.0
+@export_group("Zone / Aim (px)")
+@export var zone_half_width: float = 16.0
+@export var zone_soft_edge: float = 8.0
+@export var two_strike_expand_px: float = 6.0
+@export var aim_error_px: float = 4.0
 @export var slot_left_threshold_px: float = -12.0
 @export var slot_right_threshold_px: float = 12.0
-
-@export_group("Strike Window (px)")
-@export var zone_half_width: float = 14.0      # approx half width for "in-zone" test
-@export var zone_soft_edge: float = 8.0        # soft edge falloff
+@export var lr_bias_scale: float = 0.9
 
 @export_group("Debug")
 @export var debug_logs: bool = false
 
-# --- Internals ---
-var _batter: Batter = null
-var _plate: Node2D = null
-var _ball: Node2D = null
+var _batter: Batter
+var _plate: Node2D
+var _ball: Node2D
 var _bound_ball: Node = null
-var _ball_prev_pos: Vector2 = Vector2.ZERO
-var _ball_prev_time: float = 0.0
-var _swing_scheduled: bool = false
-var _swing_eta_s: float = 0.0
+
+var _prev_pos: Vector2 = Vector2.ZERO
+var _prev_t: float = 0.0
+var _swing_scheduled := false
 var _rng := RandomNumberGenerator.new()
+
+const EMERGENCY_WINDOW_S := 0.08   # if ETA drops under this and we haven’t planned, swing now
 
 func _ready() -> void:
 	_rng.randomize()
 	_batter = get_node_or_null(batter_path) as Batter
-	_plate = get_node_or_null(home_plate_path) as Node2D
-
-	# Node doesn't process by default
+	_plate  = get_node_or_null(home_plate_path) as Node2D
 	set_process(true)
 
-	# Bind any existing ball in the group, then auto-catch future spawns
-	_try_bind_ball_from_group()
 	get_tree().node_added.connect(_on_node_added)
+	_try_bind_ball()
 
-	if debug_logs:
-		print("[CpuBatter] ready; batter=", _batter, " plate=", _plate)
+	if typeof(GameManager) != TYPE_NIL:
+		if not GameManager.play_state_changed.is_connected(_on_play_state_changed):
+			GameManager.play_state_changed.connect(_on_play_state_changed)
+		if not GameManager.half_inning_started.is_connected(_on_half):
+			GameManager.half_inning_started.connect(_on_half)
 
-func _process(delta: float) -> void:
-	# Reacquire if missing (e.g., after despawn)
+func _process(_dt: float) -> void:
+	if _batter == null:
+		return
 	if _ball == null or not is_instance_valid(_ball):
-		_try_bind_ball_from_group()
-		_ball_prev_time = 0.0
+		_try_bind_ball()
+		_prev_t = 0.0
 		_swing_scheduled = false
-		if debug_logs:
-			print("[CpuBatter] reacquire ball: ", _ball)
-
-	if _batter == null or _plate == null or _ball == null:
 		return
 
-	var now := Time.get_ticks_msec() / 1000.0
+	# Only evaluate live pitches
+	if _ball.has_method("last_delivery"):
+		var d := String(_ball.last_delivery()).to_lower()
+		if d != "pitch":
+			return
+
+	# Plate line: ALWAYS use plate's global Y for timing
+	var plate_y := _plate.global_position.y if _plate else _batter.global_position.y
+	# X aim: prefer batter's contact point, converted to GLOBAL if needed; fallback to plate X
+	var contact_global := _contact_point_global()
+	var plate_x := contact_global.x if contact_global != null else (_plate.global_position.x if _plate else _batter.global_position.x)
+
+	# Estimate velocity via timestamps (robust to framerate variance)
+	var now_t := Time.get_ticks_msec() / 1000.0
 	var pos := _ball.global_position
 
-	# Initialize prev snapshot
-	if _ball_prev_time <= 0.0:
-		_ball_prev_time = now
-		_ball_prev_pos = pos
+	if _prev_t <= 0.0:
+		_prev_t = now_t
+		_prev_pos = pos
 		return
 
-	var dt := now - _ball_prev_time
+	var dt := now_t - _prev_t
 	if dt <= 0.0:
 		return
+	var v := (pos - _prev_pos) / dt
+	_prev_pos = pos
+	_prev_t = now_t
 
-	# Estimate velocity from motion
-	var v := (pos - _ball_prev_pos) / dt
-	_ball_prev_pos = pos
-	_ball_prev_time = now
-
-	# Expect pitches traveling downward (increasing Y toward plate)
-	if v.y <= 0.0:
+	# Must be moving toward the plate (down the screen in Godot)
+	if v.y <= min_downward_vy:
 		return
 
-	var plate_pos := _plate.global_position
-	var dy := plate_pos.y - pos.y
+	# Time to cross bat line
+	var dy := plate_y - pos.y
 	if dy <= 0.0:
+		# If already passed the plate and we didn't swing, nothing to do
 		return
 
-	var t_to_plate := dy / v.y                # seconds
-	var ms_to_plate := int(round(t_to_plate * 1000.0))
-
-	# Respect reaction floor
-	if t_to_plate < min_reaction_s:
+	var eta := dy / v.y
+	if eta < min_reaction_s or eta > eta_max_s:
+		# Emergency swing if it's now-or-never and we haven't planned anything yet
+		if not _swing_scheduled and eta > 0.0 and eta <= EMERGENCY_WINDOW_S:
+			_schedule_swing_immediately()
 		return
 
-	# Predict horizontal position at plate and set LR bias (with jitter)
-	var x_at_plate := pos.x + v.x * t_to_plate + _rng.randf_range(-aim_error_px, aim_error_px)
-	_apply_lr_bias(x_at_plate - plate_pos.x)
+	# Predict X at contact (+ tiny jitter)
+	var x_at_contact := pos.x + v.x * eta + _rng.randf_range(-aim_error_px, aim_error_px)
 
-	# Decide swing/take once per pitch
-	if not _swing_scheduled:
-		var swing_prob := _swing_probability(x_at_plate, plate_pos.x, ms_to_plate)
-		var roll := _rng.randf()
-		if debug_logs:
-			print("[CpuBatter] ETA(ms)=", ms_to_plate, " prob=", swing_prob, " roll=", roll)
-		if roll < swing_prob:
-			var scheduled_ms := ms_to_plate - swing_lead_ms + _rand_timing_jitter()
-			var scheduled_s = max(min_reaction_s, float(scheduled_ms) / 1000.0)
-			_swing_eta_s = scheduled_s
-			_swing_scheduled = true
-			_batter.ai_swing_after(scheduled_s)
-			if debug_logs:
-				print("[CpuBatter] swing scheduled in ", int(scheduled_s * 1000.0), " ms")
+	# Zone discipline + two-strike expand
+	var half_core := zone_half_width
+	var half_soft := zone_half_width + zone_soft_edge + _two_strike_expand()
+	var dx := x_at_contact - plate_x
+	var adx := absf(dx)
 
-# -----------------------
-# Binding via "balls" group
-# -----------------------
-func _on_node_added(n: Node) -> void:
-	# If we already have a ball, skip
-	if _ball != null and is_instance_valid(_ball):
+	var p_swing := 0.0
+	if adx <= half_core:
+		p_swing = 0.98
+	elif adx <= half_soft:
+		var t = (adx - half_core) / max(0.001, (half_soft - half_core))
+		var edge_will := 0.65 * (1.0 - 0.6 * discipline)
+		p_swing = lerp(0.98, edge_will, clamp(t, 0.0, 1.0))
+	else:
+		p_swing = chase_rate * (0.55 + 0.45 * (1.0 - discipline))
+
+	# Aim bias left/right by slot thresholds
+	_apply_lr_bias(dx)
+
+	if _swing_scheduled:
 		return
-	# If this node is in the ball group, bind it
-	if n.is_in_group(ball_group_name) and n is Node2D:
-		_bind_ball(n as Node2D)
 
-func _try_bind_ball_from_group() -> void:
-	var candidates := get_tree().get_nodes_in_group(ball_group_name)
-	if candidates.size() == 0:
-		return
-	# If multiple candidates exist, pick the one nearest to plate (deterministic & sensible)
-	var best: Node2D = null
-	var best_d := 1e9
-	var plate_pos := _plate.global_position if _plate != null else Vector2.ZERO
-	for c in candidates:
-		if c is Node2D:
-			var d := absf((c as Node2D).global_position.y - plate_pos.y)
-			if d < best_d:
-				best_d = d
-				best = c
-	if best != null:
-		_bind_ball(best)
-
-func _bind_ball(b: Node2D) -> void:
-	_ball = b
-	_swing_scheduled = false
-	_ball_prev_time = 0.0
-	if b.has_signal("out_of_play"):
-		if _bound_ball != b:
-			b.out_of_play.connect(_on_ball_out_of_play)
-			_bound_ball = b
+	var roll := _rng.randf()
 	if debug_logs:
-		print("[CpuBatter] bound ball: ", b)
+		print("[CPU BAT] eta=", int(eta*1000.0), "ms dx=", int(dx), " p=", "%.2f" % p_swing, " roll=", "%.2f" % roll)
 
-func _on_ball_out_of_play() -> void:
-	_swing_scheduled = false
-	_ball_prev_time = 0.0
-	if debug_logs:
-		print("[CpuBatter] out_of_play → reset")
+	if roll < p_swing:
+		var when_ms := int(round(eta * 1000.0)) - swing_lead_ms + _rand_jitter_ms()
+		var when_s = clamp(float(when_ms) / 1000.0, min_reaction_s, eta_max_s)
+		_plan_swing(when_s)
+	else:
+		# If we're very close and we chose not to commit, consider emergency tap
+		if not _swing_scheduled and eta <= EMERGENCY_WINDOW_S and adx <= (half_core * 0.8):
+			_schedule_swing_immediately()
 
-# -----------------------
-# Aim slotting & swing probability
-# -----------------------
+# ---------------- helpers ----------------
+
 func _apply_lr_bias(dx_at_plate: float) -> void:
 	var slot := 0.0
 	if dx_at_plate <= slot_left_threshold_px:
 		slot = -1.0
 	elif dx_at_plate >= slot_right_threshold_px:
 		slot = 1.0
-	else:
-		slot = 0.0
-	if _batter != null:
-		_batter.ai_set_lr_bias(slot)
+	if _batter and _batter.has_method("ai_set_lr_bias"):
+		_batter.ai_set_lr_bias(slot * lr_bias_scale)
 
-func _swing_probability(xp: float, plate_x: float, ms_to_plate: int) -> float:
-	var dx := absf(xp - plate_x)
+func _contact_point_global() -> Vector2:
+	# Prefer batter's internal contact; convert local->global if needed
+	if _batter and _batter.has_method("_contact_point"):
+		var p = _batter.call("_contact_point")
+		if p is Vector2:
+			if _batter is Node2D:
+				var nd := _batter as Node2D
+				# Heuristic: if "p" is near the batter, assume local and convert
+				# If it's far away, likely already global.
+				if (p - nd.global_position).length() < 300.0:
+					return nd.to_global(p)
+				return p
+	# fallback: use plate node if available
+	if _plate:
+		return _plate.global_position
+	return _batter.global_position if _batter else Vector2.ZERO
 
-	# Soft "in-zone" curve using discipline
-	var edge_px = lerp(18.0, 10.0, discipline)
-	var core_px = edge_px * 0.55
+func _two_strike_expand() -> float:
+	if typeof(GameManager) != TYPE_NIL and "strikes" in GameManager:
+		if int(GameManager.strikes) >= 2:
+			return max(0.0, two_strike_expand_px)
+	return 0.0
 
-	var base := 0.0
-	if dx <= core_px:
-		base = 0.95
-	elif dx <= edge_px:
-		var t = (dx - core_px) / max(0.001, (edge_px - core_px))
-		var edge_will := 0.65 * (1.0 - 0.6 * discipline)  # more discipline => smaller edge will
-		base = lerp(0.95, edge_will, clamp(t, 0.0, 1.0))
-	else:
-		base = chase_rate * (0.55 + 0.45 * (1.0 - discipline))
+func _plan_swing(delay_s: float) -> void:
+	if _batter and _batter.has_method("ai_swing_after"):
+		_batter.ai_swing_after(delay_s)
+		_swing_scheduled = true
+		if debug_logs:
+			print("[CPU BAT] swing in ", int(delay_s * 1000.0), " ms")
 
-	# Very late recognition penalty
-	if ms_to_plate < int(min_reaction_s * 1000.0 + 40.0):
-		base *= 0.85
+func _schedule_swing_immediately() -> void:
+	if _swing_scheduled:
+		return
+	_plan_swing(min_reaction_s)
 
-	return clamp(base, 0.0, 0.98)
-
-# -----------------------
-# Utilities
-# -----------------------
-func _rand_timing_jitter() -> int:
+func _rand_jitter_ms() -> int:
 	return int(round(_rng.randf_range(-float(timing_error_ms), float(timing_error_ms))))
+
+# ---------------- ball binding / lifecycle ----------------
+
+func _on_node_added(n: Node) -> void:
+	if _ball != null and is_instance_valid(_ball):
+		return
+	if n.is_in_group(ball_group_name) and n is Node2D:
+		_bind_ball(n as Node2D)
+
+func _try_bind_ball() -> void:
+	var candidates := get_tree().get_nodes_in_group(ball_group_name)
+	if candidates.is_empty():
+		return
+	var best: Node2D = null
+	var best_d := INF
+	var py := (_plate.global_position.y if _plate else 0.0)
+	for c in candidates:
+		if c is Node2D:
+			var d := absf((c as Node2D).global_position.y - py)
+			if d < best_d:
+				best_d = d
+				best = c
+	if best:
+		_bind_ball(best)
+
+func _bind_ball(b: Node2D) -> void:
+	_ball = b
+	_prev_t = 0.0
+	_swing_scheduled = false
+	if b.has_signal("out_of_play"):
+		if _bound_ball != b:
+			b.out_of_play.connect(_on_ball_out_of_play)
+			_bound_ball = b
+	if debug_logs:
+		print("[CPU BAT] bound ball: ", b)
+
+func _on_ball_out_of_play() -> void:
+	_prev_t = 0.0
+	_swing_scheduled = false
+	if debug_logs:
+		print("[CPU BAT] out_of_play → reset")
+
+func _on_play_state_changed(active: bool) -> void:
+	if not active:
+		_prev_t = 0.0
+		_swing_scheduled = false
+
+func _on_half(_inning: int, _half: int) -> void:
+	_prev_t = 0.0
+	_swing_scheduled = false
