@@ -7,6 +7,7 @@ signal pitched(ball: Node2D)
 @export var hand_path: NodePath
 @export var camera_path: NodePath
 @export var ball_scene: PackedScene
+
 @export var charge_fx_path: NodePath
 
 @export_group("Pitch Tuning")
@@ -21,9 +22,9 @@ signal pitched(ball: Node2D)
 @export var base_aim_deg: float = 0.0
 
 @export_group("Charge Zoom (centered)")
-@export var charge_zoom_scale: float = 0.80      # 20% zoom-IN while charging
-@export var zoom_in_time: float = 0.35           # slower ease-in
-@export var zoom_out_time: float = 0.10          # snap-back on release
+@export var charge_zoom_scale: float = 0.80 # 20% zoom-IN while charging
+@export var zoom_in_time: float = 0.35      # slower ease-in
+@export var zoom_out_time: float = 0.10     # snap-back on release
 
 @export_group("Accuracy & Steer")
 @export var steer_max_deg: float = 8.0
@@ -34,8 +35,8 @@ signal pitched(ball: Node2D)
 
 @onready var _hand: Node2D = get_node_or_null(hand_path)
 @onready var _cam: Node = get_node_or_null(camera_path)
-var _fx: Node = null
 
+var _fx: Node = null
 var _charging := false
 var _charge_time := 0.0
 var _aim_index := 0
@@ -45,15 +46,19 @@ var _human_cooldown_active := false
 var _human_cd_timer: SceneTreeTimer = null
 
 func _ready() -> void:
+	# Ensure input action exists (ENTER/SPACE)
 	if not InputMap.has_action("pitch"):
 		InputMap.add_action("pitch")
-		var ev_enter := InputEventKey.new(); ev_enter.keycode = KEY_ENTER
-		InputMap.action_add_event("pitch", ev_enter)
-		var ev_space := InputEventKey.new(); ev_space.keycode = KEY_SPACE
-		InputMap.action_add_event("pitch", ev_space)
+	var ev_enter := InputEventKey.new()
+	ev_enter.keycode = KEY_ENTER
+	InputMap.action_add_event("pitch", ev_enter)
+	var ev_space := InputEventKey.new()
+	ev_space.keycode = KEY_SPACE
+	InputMap.action_add_event("pitch", ev_space)
 
 	_resolve_fx()
 	set_physics_process(true)
+
 	GameManager.play_state_changed.connect(_on_play_state_changed)
 	_reset_state()
 
@@ -86,7 +91,7 @@ func _physics_process(delta: float) -> void:
 		_charge_time = clamp(_charge_time + delta, 0.0, max_charge_seconds)
 		var level = clamp(_charge_time / max(0.001, max_charge_seconds), 0.0, 1.0)
 		_fx_set_level(0, level)
-		_update_aim_from_input()
+	_update_aim_from_input()
 
 func _can_pitch_now() -> bool:
 	if _human_cooldown_active:
@@ -101,17 +106,20 @@ func _start_charge() -> void:
 	_charging = true
 	_charge_time = 0.0
 	_aim_index = 0
+
 	_fx_start()
 	_fx_set_level(0, 0.0)
 
 	# Smoothly center on pitcher while charging (no snap), then zoom 20% in.
-	var focus := _hand if is_instance_valid(_hand) else self
+	var focus: Node2D = self
+	if is_instance_valid(_hand):
+		focus = _hand
 	if _cam and _cam.has_method("begin_charge_focus"):
-		_cam.call("begin_charge_focus", focus, false)   # false = lerp to center (no jerk)
+		_cam.call("begin_charge_focus", focus, false) # false = lerp to center (no jerk)
 	if _cam and _cam.has_method("zoom_to"):
 		_cam.call("zoom_to", charge_zoom_scale, zoom_in_time)
 	else:
-		# Fallback: direct property tween (still centered because camera position untouched)
+		# Fallback: property tween
 		var z := Vector2(1.0 / max(charge_zoom_scale, 0.0001), 1.0 / max(charge_zoom_scale, 0.0001))
 		var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 		tw.tween_property(_cam, "zoom", z, zoom_in_time)
@@ -128,13 +136,17 @@ func _throw_with(level: float, steer_lr: float) -> void:
 
 	var b := _spawn_ball()
 	if b:
-		var origin: Vector2
+		var origin: Vector2 = global_position
 		if is_instance_valid(_hand):
 			origin = _hand.global_position
-		else:
-			origin = global_position
 		var dir := Vector2(sin(deg_to_rad(final_deg)), 1.0).normalized()
+
 		_safe_call_pitch_from(b, origin, dir, speed, acc, steer_lr)
+
+		# Safety: guarantee end_of_play even if other systems miss it
+		if b.has_signal("out_of_play"):
+			b.connect("out_of_play", Callable(GameManager, "end_play"))
+
 		b.add_to_group("balls")
 		pitched.emit(b)
 
@@ -148,7 +160,7 @@ func _throw_with(level: float, steer_lr: float) -> void:
 		var tw := create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 		tw.tween_property(_cam, "zoom", Vector2.ONE, zoom_out_time)
 	if _cam and _cam.has_method("end_charge_focus"):
-		_cam.call("end_charge_focus", false) # keep on pitcher framing (no snap)
+		_cam.call("end_charge_focus", false) # keep pitcher framing (no snap)
 
 	_start_human_cooldown()
 
@@ -191,7 +203,7 @@ func _start_human_cooldown() -> void:
 	if _human_cd_timer != null:
 		return
 	_human_cd_timer = get_tree().create_timer(max(0.01, human_cooldown_min))
-	_human_cd_timer.timeout.connect(func():
+	_human_cd_timer.timeout.connect(func ():
 		_human_cooldown_active = false
 		_human_cd_timer = null
 	)
@@ -213,6 +225,8 @@ func _resolve_fx() -> void:
 			if c is CPUParticles2D:
 				_fx = c
 				break
+
+	# Give particles a tiny white texture if missing
 	if _fx is CPUParticles2D:
 		var p := _fx as CPUParticles2D
 		if p.texture == null:
@@ -221,7 +235,8 @@ func _resolve_fx() -> void:
 			p.texture = ImageTexture.create_from_image(img)
 
 func _fx_start() -> void:
-	if _fx == null: return
+	if _fx == null:
+		return
 	if _fx.has_method("start_charge"):
 		_fx.call("start_charge")
 	elif _fx is CPUParticles2D:
@@ -236,7 +251,8 @@ func _fx_start() -> void:
 		p.emitting = true
 
 func _fx_set_level(phase: int, level: float) -> void:
-	if _fx == null: return
+	if _fx == null:
+		return
 	if _fx.has_method("set_level"):
 		_fx.call("set_level", level, phase)
 	elif _fx is CPUParticles2D:
@@ -248,7 +264,8 @@ func _fx_set_level(phase: int, level: float) -> void:
 			p.spread = 180.0
 
 func _fx_release(power: float) -> void:
-	if _fx == null: return
+	if _fx == null:
+		return
 	if _fx.has_method("release_burst"):
 		_fx.call("release_burst", clamp(power, 0.0, 1.0))
 	elif _fx is CPUParticles2D:
@@ -267,9 +284,11 @@ func _fx_stop() -> void:
 		p.emitting = false
 		p.visible = false
 
-# ----------------- AI hooks (use same centered zoom/focus) -----------------
+# ----------------- AI hooks (keep parity with human path) -----------------
 func ai_begin_charge_zoom() -> void:
-	var focus := _hand if is_instance_valid(_hand) else self
+	var focus: Node2D = self
+	if is_instance_valid(_hand):
+		focus = _hand
 	if _cam and _cam.has_method("begin_charge_focus"):
 		_cam.call("begin_charge_focus", focus, false)
 	if _cam and _cam.has_method("zoom_to"):
@@ -292,17 +311,22 @@ func ai_pitch(power: float, accuracy: float, target_deg: float, steer_lr: float)
 
 	var b := _spawn_ball()
 	if b:
-		var origin: Vector2
+		var origin: Vector2 = global_position
 		if is_instance_valid(_hand):
 			origin = _hand.global_position
-		else:
-			origin = global_position
 		var dir := Vector2(sin(deg_to_rad(final_deg)), 1.0).normalized()
+
 		_safe_call_pitch_from(b, origin, dir, speed, acc, steer_lr)
+
+		# Safety: same out_of_play → end_play wiring on AI path
+		if b.has_signal("out_of_play"):
+			b.connect("out_of_play", Callable(GameManager, "end_play"))
+
 		b.add_to_group("balls")
 		pitched.emit(b)
 
 	_fx_release(p)
+
 	if _cam and _cam.has_method("zoom_to"):
 		_cam.call("zoom_to", 1.0, zoom_out_time)
 	if _cam and _cam.has_method("end_charge_focus"):
@@ -320,13 +344,13 @@ func _safe_call_pitch_from(ball: Object, origin: Vector2, dir: Vector2, speed: f
 	else:
 		if ball.has_method("set_velocity"):
 			ball.call("set_velocity", dir * speed)
-	if ball.has_method("set_accuracy"):
-		ball.call("set_accuracy", acc)
-	if ball.has_method("set_pitch_steer"):
-		ball.call("set_pitch_steer", steer)
-	if ball is Node:
-		(ball as Node).set_meta("pitch_accuracy", acc)
-		(ball as Node).set_meta("pitch_steer", steer)
+		if ball.has_method("set_accuracy"):
+			ball.call("set_accuracy", acc)
+		if ball.has_method("set_pitch_steer"):
+			ball.call("set_pitch_steer", steer)
+		if ball is Node:
+			(ball as Node).set_meta("pitch_accuracy", acc)
+			(ball as Node).set_meta("pitch_steer", steer)
 
 func _get_method_argc(obj: Object, name: String) -> int:
 	var list := obj.get_method_list()
@@ -336,5 +360,5 @@ func _get_method_argc(obj: Object, name: String) -> int:
 			var args = m.get("args")
 			if typeof(args) == TYPE_ARRAY:
 				return (args as Array).size()
-			return 0
+	# default fallback
 	return 0

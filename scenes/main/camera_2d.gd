@@ -102,6 +102,8 @@ func _physics_process(_delta: float) -> void:
 			global_position = _node_screen_anchor(tgt)
 
 func _on_follow_target_out_of_play() -> void:
+	if GameManager and GameManager.has_method("end_play"):
+		GameManager.end_play()  # optional redundancy
 	_schedule_return_to_default()
 
 func _on_follow_target_tree_exited() -> void:
@@ -148,3 +150,4 @@ func _disconnect_from_current_follow() -> void:
 func _cancel_return_timer() -> void:
 	if _return_timer != null:
 		_return_timer = null
+	

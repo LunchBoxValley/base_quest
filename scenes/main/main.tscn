@@ -617,6 +617,7 @@ sources/0 = SubResource("TileSetAtlasSource_ouso4")
 
 [node name="CpuPitcher" type="Node" parent="AI"]
 script = ExtResource("1_ouso4")
+pitcher_path = NodePath("../../Entities/Pitcher")
 
 [node name="CpuBatter" type="Node" parent="AI"]
 script = ExtResource("2_blune")
