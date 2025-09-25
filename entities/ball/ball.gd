@@ -18,7 +18,7 @@ signal out_of_play
 @export var scale_near_pitch: float = 1.00
 @export var scale_far_pitch: float = 0.50
 
-# --- Depth Scale — Hit (NES-y distance perspective) ---
+# --- Depth Scale — Hit (bold NES-y) ---
 @export_group("Depth Scale — Hit")
 @export var near_y_hit: float = 140.0
 @export var far_y_hit: float = 20.0
@@ -27,21 +27,20 @@ signal out_of_play
 @export var hit_initial_shrink: float = 0.70
 @export var hit_depth_boost_time: float = 0.22
 
-# --- Height→Scale (z “pop”) for hits only ---
-# Goal: ~6x at peak, slightly smaller on ground.
+# --- Height Scaling ---
 @export_group("Height Scaling")
-@export var height_scale_ground: float = 0.90   # < 1.0 = slightly smaller on ground
-@export var height_scale_high: float = 6.00     # peak height target (~6x)
+@export var height_scale_ground: float = 0.90
+@export var height_scale_high: float = 6.00
 
-# --- Quantize to keep pixels crisp ---
+# --- Depth Quantize ---
 @export_group("Depth Quantize")
 @export var scale_quantize_step: float = 0.125
 
-# --- Trail (juice) ---
+# --- Trail ---
 @export_group("Trail")
 @export var trail_len: int = 8
 
-# --- Grounder / Drop tuning (no full physics) ---
+# --- Grounder / Drop ---
 @export_group("Grounder / Drop")
 @export var bounce_count_min: int = 1
 @export var bounce_count_max: int = 3
@@ -54,11 +53,11 @@ signal out_of_play
 @export var roll_friction: float = 80.0
 @export var stop_speed_threshold: float = 30.0
 
-# --- Shadow control (ellipse via node scale; radius/alpha set by height) ---
+# --- Shadow ---
 @export_group("Shadow")
 @export var shadow_enabled: bool = true
-@export var shadow_radius_min_px: float = 0.5    # smaller when high
-@export var shadow_radius_max_px: float = 5.0    # slightly bigger on ground
+@export var shadow_radius_min_px: float = 0.5
+@export var shadow_radius_max_px: float = 5.0
 @export var shadow_alpha_near: float = 0.75
 @export var shadow_alpha_far: float = 0.12
 @export var shadow_width_scale: float = 1.2
@@ -68,7 +67,7 @@ signal out_of_play
 @export var shadow_dir: Vector2 = Vector2(-1.0, 1.0)
 @export var shadow_base_offset: Vector2 = Vector2(-3.0, 2.0)
 
-# --- Optional Sweep (ShapeCast2D) ---
+# --- Sweep (optional) ---
 @export_group("Sweep (optional)")
 @export var sweep_enable_speed: float = 220.0
 @export var sweep_epsilon: float = 0.5
@@ -79,17 +78,14 @@ var _active: bool = false
 var _start_pos: Vector2 = Vector2.ZERO
 var _is_hit: bool = false
 
-# Delivery flag: "pitch" | "hit" | "throw"
-var _delivery: String = "pitch"
+var _delivery: String = "pitch"  # "pitch" | "hit" | "throw"
 
-# Contact kind
 const KIND_GROUNDER := 0
 const KIND_LINER := 1
 const KIND_FLY := 2
 const KIND_BLAST := 3
 var _kind: int = KIND_LINER
 
-# Bounce / drop state
 var _distance_traveled: float = 0.0
 var _last_bounce_at: float = 0.0
 var _next_bounce_spacing: float = 40.0
@@ -97,7 +93,6 @@ var _bounces_left: int = 0
 var _in_roll: bool = false
 var _dropped: bool = false
 
-# Node refs (optional)
 @onready var anim: AnimatedSprite2D = $Anim
 @onready var sprite: Sprite2D = $Sprite
 @onready var trail: Line2D = $Trail
@@ -141,7 +136,6 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 		trail.clear_points()
 		trail.add_point(global_position)
 
-# meta: {"type":"grounder"/"liner"/"fly"/"blast", "delivery":"hit"/"throw"/"pitch", ...}
 func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> void:
 	_reset_state()
 	var delivery := String(meta.get("delivery", "hit")).to_lower()
@@ -329,7 +323,6 @@ func _end_play() -> void:
 
 # ---------- Depth & Shadow ----------
 func _update_depth_scale() -> void:
-	# Distance-based scale by Y (keeps NES depth illusion)
 	var near_y: float
 	var far_y: float
 	var s_near: float
@@ -348,28 +341,22 @@ func _update_depth_scale() -> void:
 	var t = clamp(inverse_lerp(far_y, near_y, global_position.y), 0.0, 1.0)
 	var s = lerp(s_far, s_near, t)
 
-	# Optional: initial shrink right after contact (you already had this)
 	if _is_hit and hit_depth_boost_time > 0.0:
 		var k = clamp(_hit_boost_t / hit_depth_boost_time, 0.0, 1.0)
 		var factor = lerp(1.0, hit_initial_shrink, k)
 		s *= factor
 
-	# Height pop for hits:
-	# h = 0 on ground → multiply by ~0.9 (slightly smaller),
-	# h = 1 at apex → multiply by ~6.0 (six times larger).
-	var h := _estimate_height_norm()  # 0..1, peak mid-flight
+	var h := _estimate_height_norm()
 	var z_scale := 1.0
 	if _is_hit:
 		z_scale = lerp(height_scale_ground, height_scale_high, h)
 	s *= z_scale
 
-	# Pixel-quantized scale for crisp sprites
 	if scale_quantize_step > 0.0:
 		s = round(s / scale_quantize_step) * scale_quantize_step
 	scale = Vector2.ONE * max(0.01, s)
 
 func _estimate_height_norm() -> float:
-	# 0..1 where 0 = on ground, 1 = at peak; already used by shadow and z pop
 	if not _is_hit:
 		return 0.0
 	if _in_roll or _dropped:
@@ -382,7 +369,7 @@ func _estimate_height_norm() -> float:
 		u = clamp(since / seg, 0.0, 1.0)
 	else:
 		u = clamp(_distance_traveled / air_len, 0.0, 1.0)
-	var hump := 4.0 * u * (1.0 - u) # 0..1 with peak at u=0.5
+	var hump := 4.0 * u * (1.0 - u)
 	var k := 0.5
 	if _kind == KIND_GROUNDER:
 		k = 0.15
@@ -398,14 +385,10 @@ func _update_shadow() -> void:
 	if not shadow_enabled or shadow == null:
 		return
 	var h := _estimate_height_norm()
-	# radius: bigger on ground (h=0), smaller in air (h=1)
 	var radius = lerp(shadow_radius_max_px, shadow_radius_min_px, h)
-	# alpha: darker on ground, faint aloft
 	var alpha = lerp(shadow_alpha_near, shadow_alpha_far, h)
 	if shadow.has_method("set_shape"):
 		shadow.set_shape(radius, alpha)
-
-	# Ellipse aspect & positional slide
 	shadow.scale = Vector2(shadow_width_scale, shadow_height_scale)
 	var dir := shadow_dir
 	if dir.length() > 0.001:
@@ -413,3 +396,23 @@ func _update_shadow() -> void:
 	var slide := dir * shadow_slide_per_height_px * h
 	shadow.position = shadow_base_offset + Vector2(0, shadow_y_offset) + slide
 	shadow.z_index = -1
+
+# ---------- Wall Bounce (NEW) ----------
+func wall_bounce(normal: Vector2, damping: float = 0.85, random_angle_deg: float = 12.0) -> void:
+	if normal.length() <= 0.0001:
+		return
+	var n := normal.normalized()
+	var v := _velocity
+	# Reflect velocity over the wall normal
+	var r := v - 2.0 * v.dot(n) * n
+	# Add a little random angle to keep it lively
+	var ang := deg_to_rad(randf_range(-random_angle_deg, random_angle_deg))
+	r = r.rotated(ang)
+	_velocity = r * clamp(damping, 0.0, 1.0)
+
+	# Treat as a live hit in-air; let normal drop/bounce logic proceed
+	_is_hit = true
+	if _delivery != "throw":
+		_delivery = "hit"
+	_pulse_scale(1.06, 0.06)
+	_update_shadow()
