@@ -674,8 +674,6 @@ pitcher_path = NodePath("../Pitcher")
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
-home_plate_path = NodePath("../../HomePlate")
-spray_random = 0.25
 
 [node name="Base1" parent="Entities" instance=ExtResource("6_b1x3f")]
 position = Vector2(267, 40)

@@ -3,13 +3,13 @@ class_name Fielder
 
 @export_group("Team / Placement")
 @export var team_id: int = 1
-@export var home_marker_path: NodePath        # <- point to a Marker2D near this fielder’s post
+@export var home_marker_path: NodePath # <- point to a Marker2D near this fielder’s post
 var _home_marker: Node2D = null
-var _spawn_pos: Vector2 = Vector2.ZERO        # fallback if no marker set
+var _spawn_pos: Vector2 = Vector2.ZERO # fallback if no marker set
 
 @export_group("Scene Paths")
-@export var field_path: NodePath              # -> FieldJudge / Field node (optional)
-@export var pitcher_path: NodePath            # -> Entities/Pitcher (for fallback throws)
+@export var field_path: NodePath # -> FieldJudge / Field node (optional)
+@export var pitcher_path: NodePath # -> Entities/Pitcher (for fallback throws)
 
 @export_group("Movement")
 @export var move_speed: float = 85.0
@@ -54,7 +54,6 @@ func _ready() -> void:
 
 	if field_path != NodePath():
 		_field = get_node_or_null(field_path)
-
 	if pitcher_path != NodePath():
 		_pitcher = get_node_or_null(pitcher_path) as Node2D
 
@@ -77,20 +76,16 @@ func _physics_process(delta: float) -> void:
 	var desired := Vector2.ZERO
 	if dist > stop_radius_px:
 		desired = to_target.normalized() * move_speed
-
 	var dv := desired - velocity
 	var max_step := accel * delta
 	if dv.length() > max_step:
 		dv = dv.normalized() * max_step
 	velocity += dv
-
 	if velocity.length() < 0.01 and dist <= stop_radius_px:
 		velocity = Vector2.ZERO
-
 	move_and_slide()
 
 # -------------------- AI Core --------------------
-
 func _on_decide() -> void:
 	# Keep ball ref fresh
 	if (_ball == null) or (not is_instance_valid(_ball)):
@@ -105,6 +100,7 @@ func _on_decide() -> void:
 		S_IDLE:
 			# Only begin chasing **live hits**
 			if live and is_hit and _acquire_ball():
+				_claim_ball(_ball)                 # NEW: claim ownership
 				_enter_state(S_SEEK_BALL)
 			else:
 				_set_target(_get_home_pos())
@@ -112,17 +108,21 @@ func _on_decide() -> void:
 		S_SEEK_BALL:
 			# Stop if play ended
 			if not live:
+				_release_ball_claim(_ball)        # NEW: let go of claim
 				_enter_state(S_RETURN)
 				return
 			# Stop if the ball is no longer a **hit** (e.g. it became a throw)
-			if not is_instance_valid(_ball) or not (_ball.has_method("last_delivery") and String(_ball.last_delivery()).to_lower() == "hit"):
+			if not is_instance_valid(_ball) \
+			or not (_ball.has_method("last_delivery") and String(_ball.last_delivery()).to_lower() == "hit"):
+				_release_ball_claim(_ball)        # NEW
 				_enter_state(S_RETURN)
 				return
 
 			_set_target(_ball.global_position)
 
 			# Pickup check
-			if is_instance_valid(_ball) and global_position.distance_to(_ball.global_position) <= pickup_radius_px:
+			if is_instance_valid(_ball) \
+			and global_position.distance_to(_ball.global_position) <= pickup_radius_px:
 				_pickup_ball(_ball)
 				_enter_state(S_THROW)
 
@@ -143,7 +143,6 @@ func _on_decide() -> void:
 				_enter_state(S_IDLE)
 
 # -------------------- Helpers --------------------
-
 func _get_home_pos() -> Vector2:
 	if _home_marker != null:
 		return _home_marker.global_position
@@ -167,28 +166,64 @@ func _set_target(p: Vector2) -> void:
 	_move_target = p
 	# (Nav pathing hookup can go here later)
 
+# --- NEW: single-claimer system to prevent dog-piles ---
+func _can_chase_ball(b: Node) -> bool:
+	if b == null or not is_instance_valid(b):
+		return false
+	if not (b.has_method("last_delivery") and String(b.last_delivery()).to_lower() == "hit"):
+		return false
+	var claim = b.get_meta("claimer") if b.has_meta("claimer") else null
+	return claim == null or int(claim) == get_instance_id()
+
+func _claim_ball(b: Node) -> void:
+	if b and is_instance_valid(b):
+		b.set_meta("claimer", get_instance_id())
+		if b.has_signal("out_of_play") and not b.is_connected("out_of_play", Callable(self, "_on_claimed_ball_out")):
+			b.connect("out_of_play", Callable(self, "_on_claimed_ball_out"))
+
+func _release_ball_claim(b: Node) -> void:
+	if b and is_instance_valid(b):
+		if b.has_meta("claimer") and int(b.get_meta("claimer")) == get_instance_id():
+			b.remove_meta("claimer")
+		if b.has_signal("out_of_play") and b.is_connected("out_of_play", Callable(self, "_on_claimed_ball_out")):
+			b.disconnect("out_of_play", Callable(self, "_on_claimed_ball_out"))
+
+func _on_claimed_ball_out() -> void:
+	_release_ball_claim(_ball)
+	_ball = null
+	if _state != S_RETURN:
+		_enter_state(S_RETURN)
+
 func _acquire_ball() -> bool:
 	if is_instance_valid(_ball):
 		return true
-	var balls := get_tree().get_nodes_in_group("balls")
-	if balls.size() == 0:
-		return false
-	for b in balls:
-		var bb := b as Ball
+	var best: Ball = null
+	var best_d := 1e9
+	var pos := global_position
+	for n in get_tree().get_nodes_in_group("balls"):
+		var bb := n as Ball
 		if bb == null:
 			continue
-		_ball = bb
-		if _ball.has_signal("out_of_play"):
-			if not _ball.is_connected("out_of_play", Callable(self, "_on_ball_out_of_play")):
-				_ball.connect("out_of_play", Callable(self, "_on_ball_out_of_play"))
-		return true
-	return false
+		if not _can_chase_ball(bb):
+			continue
+		var d := pos.distance_to(bb.global_position)
+		if d < best_d:
+			best_d = d
+			best = bb
+	if best == null:
+		return false
+	_ball = best
+	if _ball.has_signal("out_of_play"):
+		if not _ball.is_connected("out_of_play", Callable(self, "_on_ball_out_of_play")):
+			_ball.connect("out_of_play", Callable(self, "_on_ball_out_of_play"))
+	return true
 
 func _pickup_ball(ball: Ball) -> void:
 	if not is_instance_valid(ball):
 		return
 	_has_ball = true
 	_ball = ball
+	_release_ball_claim(ball)                        # NEW: we’re holding it now
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
 	_ball.global_position = _glove.global_position
 
@@ -197,7 +232,11 @@ func _choose_throw_target() -> Node2D:
 	if _field and _field.has_method("choose_force_base"):
 		return _field.choose_force_base(team_id)
 
-	# Fallback: throw to first base by default (use NodePath in 4.x)
+	# NEW: default to throwing back to the pitcher (safer than hard-coded "Base1")
+	if _pitcher and is_instance_valid(_pitcher):
+		return _pitcher
+
+	# Legacy fallback: first base, if present
 	var root := get_tree().get_current_scene()
 	var b1 := root.get_node_or_null(NodePath("Base1")) as Node2D
 	return b1 if b1 != null else root
@@ -205,7 +244,6 @@ func _choose_throw_target() -> Node2D:
 func _do_throw_to(target: Node2D) -> void:
 	if not is_instance_valid(_ball) or not _has_ball:
 		return
-
 	var dir := Vector2.DOWN
 	var spd := throw_speed_min
 	var label := "liner"
@@ -228,19 +266,20 @@ func _do_throw_to(target: Node2D) -> void:
 			label = "fly"
 
 	# IMPORTANT: pass meta and then tag the ball as a throw, so other fielders won't chase it
-	_release_and_deflect(dir, spd, {"type": label, "delivery":"throw"})
+	_release_and_deflect(dir, spd, {"type": label, "delivery": "throw"})
 
 func _release_and_deflect(dir: Vector2, spd: float, meta: Dictionary) -> void:
 	_ball.process_mode = Node.PROCESS_MODE_INHERIT
 	_ball.global_position = _glove.global_position + dir * 2.0
 	_ball.deflect(dir, spd, meta)
 	if _ball.has_method("mark_thrown"):
-		_ball.mark_thrown()  # ensure last_delivery() reports "throw" even if deflect() overwrote it
+		_ball.mark_thrown() # ensure last_delivery() reports "throw" even if deflect() overwrote it
 	_has_ball = false
 	_ball = null
 
 func _on_ball_out_of_play() -> void:
 	_has_ball = false
+	_release_ball_claim(_ball)   # NEW: hygiene
 	_ball = null
 	if _state != S_RETURN:
 		_enter_state(S_RETURN)

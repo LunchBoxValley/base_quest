@@ -27,6 +27,11 @@ signal out_of_play
 @export var hit_initial_shrink: float = 0.70
 @export var hit_depth_boost_time: float = 0.22
 
+# --- NEW: Height→Scale (z “pop”) ---
+@export_group("Height Scaling")
+@export var height_scale_ground: float = 0.90      # smaller when hugging dirt
+@export var height_scale_high: float = 1.35        # larger at peak of pop-up
+
 # --- Quantize to keep pixels crisp ---
 @export_group("Depth Quantize")
 @export var scale_quantize_step: float = 0.125
@@ -51,21 +56,21 @@ signal out_of_play
 # --- Shadow control (smaller + slide down-left with "height") ---
 @export_group("Shadow")
 @export var shadow_enabled: bool = true
-@export var shadow_radius_min_px: float = 0.8     # very small when “high”
-@export var shadow_radius_max_px: float = 3.0     # modest near ground
-@export var shadow_alpha_near: float = 0.70       # opaque near ground
-@export var shadow_alpha_far: float = 0.18        # faint when high
-@export var shadow_width_scale: float = 1.2       # ellipse proportions
+@export var shadow_radius_min_px: float = 0.8
+@export var shadow_radius_max_px: float = 3.0
+@export var shadow_alpha_near: float = 0.70
+@export var shadow_alpha_far: float = 0.18
+@export var shadow_width_scale: float = 1.2
 @export var shadow_height_scale: float = 0.4
 @export var shadow_y_offset: float = 0.0
-@export var shadow_slide_per_height_px: float = 2.0  # slide distance per “height”
-@export var shadow_dir: Vector2 = Vector2(-1.0, 1.0) # ← light from upper-right → shadow down-left
-@export var shadow_base_offset: Vector2 = Vector2(-3.0, 2.0) # sits slightly left & behind even at h=0
+@export var shadow_slide_per_height_px: float = 2.0
+@export var shadow_dir: Vector2 = Vector2(-1.0, 1.0)
+@export var shadow_base_offset: Vector2 = Vector2(-3.0, 2.0)
 
 # --- Optional Sweep (ShapeCast2D) ---
 @export_group("Sweep (optional)")
-@export var sweep_enable_speed: float = 220.0   # enable Sweep above this speed
-@export var sweep_epsilon: float = 0.5          # stop this far before first hit
+@export var sweep_enable_speed: float = 220.0
+@export var sweep_epsilon: float = 0.5
 
 # --- State ---
 var _velocity: Vector2 = Vector2.ZERO
@@ -78,9 +83,9 @@ var _delivery: String = "pitch"
 
 # Contact kind
 const KIND_GROUNDER := 0
-const KIND_LINER    := 1
-const KIND_FLY      := 2
-const KIND_BLAST    := 3
+const KIND_LINER := 1
+const KIND_FLY := 2
+const KIND_BLAST := 3
 var _kind: int = KIND_LINER
 
 # Bounce / drop state
@@ -95,8 +100,8 @@ var _dropped: bool = false
 @onready var anim: AnimatedSprite2D = $Anim
 @onready var sprite: Sprite2D = $Sprite
 @onready var trail: Line2D = $Trail
-@onready var shadow := $Shadow    # BallShadow (optional child)
-@onready var _sweep: ShapeCast2D = get_node_or_null("Sweep")  # OPTIONAL
+@onready var shadow := $Shadow
+@onready var _sweep: ShapeCast2D = get_node_or_null("Sweep")
 
 var _spin_t: float = 0.0
 var _spin_active: bool = false
@@ -132,22 +137,17 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 		trail.clear_points()
 		trail.add_point(global_position)
 
-# meta can include: {"type": "grounder"/"liner"/"fly"/"blast", "angle_deg": float, "delivery": "hit"/"throw"/"pitch"}
+# meta: {"type":"grounder"/"liner"/"fly"/"blast", "delivery":"hit"/"throw"/"pitch", ...}
 func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> void:
 	_reset_state()
-
-	# RESPECT meta.delivery (default to "hit")
 	var delivery := String(meta.get("delivery", "hit")).to_lower()
 	match delivery:
 		"throw":
-			_delivery = "throw"
-			_is_hit = false
+			_delivery = "throw"; _is_hit = false
 		"pitch":
-			_delivery = "pitch"
-			_is_hit = false
+			_delivery = "pitch"; _is_hit = false
 		_:
-			_delivery = "hit"
-			_is_hit = true
+			_delivery = "hit";   _is_hit = true
 
 	_start_pos = global_position
 	_hit_boost_t = hit_depth_boost_time
@@ -156,14 +156,10 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	_start_spin()
 
 	var label := String(meta.get("type", "liner"))
-	if label == "grounder":
-		_kind = KIND_GROUNDER
-	elif label == "fly":
-		_kind = KIND_FLY
-	elif label == "blast":
-		_kind = KIND_BLAST
-	else:
-		_kind = KIND_LINER
+	if label == "grounder": _kind = KIND_GROUNDER
+	elif label == "fly":     _kind = KIND_FLY
+	elif label == "blast":   _kind = KIND_BLAST
+	else:                    _kind = KIND_LINER
 
 	if _kind == KIND_GROUNDER:
 		_bounces_left = bounce_count_min + (randi() % max(1, bounce_count_max - bounce_count_min + 1))
@@ -179,11 +175,8 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	_update_depth_scale()
 	_update_shadow()
 
-func mark_thrown() -> void:
-	_delivery = "throw"
-
-func last_delivery() -> String:
-	return _delivery
+func mark_thrown() -> void: _delivery = "throw"
+func last_delivery() -> String: return _delivery
 
 func _reset_state() -> void:
 	_distance_traveled = 0.0
@@ -200,10 +193,7 @@ func _start_spin() -> void:
 		var frames := anim.sprite_frames
 		var names := frames.get_animation_names()
 		if names.size() > 0:
-			if names.has("spin"):
-				anim.animation = "spin"
-			else:
-				anim.animation = names[0]
+			anim.animation = "spin" if names.has("spin") else names[0]
 			anim.speed_scale = anim_speed_scale
 			anim.play()
 			_spin_active = false
@@ -212,11 +202,9 @@ func _start_spin() -> void:
 	_spin_active = true
 
 func _stop_spin() -> void:
-	if anim:
-		anim.stop()
+	if anim: anim.stop()
 	_spin_active = false
-	if sprite:
-		sprite.rotation = 0.0
+	if sprite: sprite.rotation = 0.0
 
 func _process(delta: float) -> void:
 	if _spin_active and sprite:
@@ -229,12 +217,10 @@ func _process(delta: float) -> void:
 	_update_shadow()
 
 func _physics_process(delta: float) -> void:
-	if not _active:
-		return
-
+	if not _active: return
 	var step := _velocity * delta
 
-	# OPTIONAL: swept motion if Sweep exists and we're moving fast
+	# Optional swept motion
 	if _sweep and _velocity.length() >= sweep_enable_speed and step.length() > 0.0:
 		_sweep.enabled = true
 		_sweep.target_position = step
@@ -251,8 +237,7 @@ func _physics_process(delta: float) -> void:
 		else:
 			global_position += step
 	else:
-		if _sweep:
-			_sweep.enabled = false
+		if _sweep: _sweep.enabled = false
 		global_position += step
 
 	_distance_traveled += step.length()
@@ -307,7 +292,7 @@ func _do_drop() -> void:
 		_bounces_left = drop_bounces
 		_last_bounce_at = _distance_traveled
 		_next_bounce_spacing = 12.0
-	_in_roll = true
+		_in_roll = true
 
 func _pulse_scale(amount: float, time_s: float) -> void:
 	var start := scale
@@ -321,33 +306,35 @@ func _end_play() -> void:
 	out_of_play.emit()
 	queue_free()
 
+# ---------- Depth & Shadow ----------
 func _update_depth_scale() -> void:
+	# Base “distance from camera” scale by y (what you already had)
 	var near_y := near_y_hit if _is_hit else near_y_pitch
-	var far_y :=  far_y_hit  if _is_hit else far_y_pitch
+	var far_y := far_y_hit if _is_hit else far_y_pitch
 	var s_near := scale_near_hit if _is_hit else scale_near_pitch
-	var s_far :=  scale_far_hit  if _is_hit else scale_far_pitch
-
+	var s_far := scale_far_hit if _is_hit else scale_far_pitch
 	var t = clamp(inverse_lerp(far_y, near_y, global_position.y), 0.0, 1.0)
 	var s = lerp(s_far, s_near, t)
 
+	# Hit-depth boost (existing)
 	if _is_hit and hit_depth_boost_time > 0.0:
 		var k = clamp(_hit_boost_t / hit_depth_boost_time, 0.0, 1.0)
 		var factor = lerp(1.0, hit_initial_shrink, k)
 		s *= factor
 
+	# NEW: “height” (z) pop — larger when high, smaller on grounders
+	var h := _estimate_height_norm()  # 0..1, peak around mid-flight
+	var z_scale = lerp(height_scale_ground, height_scale_high, h)
+	s *= z_scale
+
 	if scale_quantize_step > 0.0:
 		s = round(s / scale_quantize_step) * scale_quantize_step
-
 	scale = Vector2.ONE * max(0.01, s)
 
-# ---------- Shadow logic ----------
 func _estimate_height_norm() -> float:
-	# 0..1 where 0 = on ground, 1 = peak. Crude but readable.
-	if not _is_hit:
-		return 0.0
-	if _in_roll or _dropped:
-		return 0.0
-
+	# 0..1 where 0 = on ground, 1 = at peak; already used by shadows
+	if not _is_hit: return 0.0
+	if _in_roll or _dropped: return 0.0
 	var air_len = max(1.0, max_travel - drop_trigger_px)
 	var u: float
 	if _kind == KIND_GROUNDER:
@@ -356,42 +343,23 @@ func _estimate_height_norm() -> float:
 		u = clamp(since / seg, 0.0, 1.0)
 	else:
 		u = clamp(_distance_traveled / air_len, 0.0, 1.0)
-
-	var hump := 4.0 * u * (1.0 - u)   # 0..1 with peak at u=0.5
+	var hump := 4.0 * u * (1.0 - u) # 0..1 with peak at u=0.5
 	var k := 0.5
-	if _kind == KIND_GROUNDER:
-		k = 0.15
-	elif _kind == KIND_LINER:
-		k = 0.45
-	elif _kind == KIND_FLY:
-		k = 0.80
-	elif _kind == KIND_BLAST:
-		k = 1.00
-
+	if _kind == KIND_GROUNDER: k = 0.15
+	elif _kind == KIND_LINER:   k = 0.45
+	elif _kind == KIND_FLY:     k = 0.80
+	elif _kind == KIND_BLAST:   k = 1.00
 	return clamp(hump * k, 0.0, 1.0)
 
 func _update_shadow() -> void:
-	if not shadow_enabled or shadow == null:
-		return
-
-	var h := _estimate_height_norm()  # 0..1 (0 = ground, 1 = “high”)
-
-	# Smaller + fainter as “height” increases
+	if not shadow_enabled or shadow == null: return
+	var h := _estimate_height_norm()
 	var radius = lerp(shadow_radius_max_px, shadow_radius_min_px, h)
-	var alpha  = lerp(shadow_alpha_near,    shadow_alpha_far,    h)
-
-	if shadow.has_method("set_shape"):
-		shadow.set_shape(radius, alpha)
-
-	# Keep ellipse proportions
+	var alpha = lerp(shadow_alpha_near, shadow_alpha_far, h)
+	if shadow.has_method("set_shape"): shadow.set_shape(radius, alpha)
 	shadow.scale = Vector2(shadow_width_scale, shadow_height_scale)
-
-	# Directional slide: down-left (if shadow_dir = (-1, +1)) as height increases
 	var dir := shadow_dir
-	if dir.length() > 0.001:
-		dir = dir.normalized()
+	if dir.length() > 0.001: dir = dir.normalized()
 	var slide := dir * shadow_slide_per_height_px * h
-
-	# Base placement: slightly left & behind even at h=0
 	shadow.position = shadow_base_offset + Vector2(0, shadow_y_offset) + slide
 	shadow.z_index = -1
