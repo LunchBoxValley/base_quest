@@ -18,7 +18,7 @@ signal out_of_play
 @export var scale_near_pitch: float = 1.00
 @export var scale_far_pitch: float = 0.50
 
-# --- Depth Scale — Hit (bold NES-y) ---
+# --- Depth Scale — Hit (NES-y distance perspective) ---
 @export_group("Depth Scale — Hit")
 @export var near_y_hit: float = 140.0
 @export var far_y_hit: float = 20.0
@@ -27,10 +27,11 @@ signal out_of_play
 @export var hit_initial_shrink: float = 0.70
 @export var hit_depth_boost_time: float = 0.22
 
-# --- NEW: Height→Scale (z “pop”) ---
+# --- Height→Scale (z “pop”) for hits only ---
+# Goal: ~6x at peak, slightly smaller on ground.
 @export_group("Height Scaling")
-@export var height_scale_ground: float = 0.90      # smaller when hugging dirt
-@export var height_scale_high: float = 1.35        # larger at peak of pop-up
+@export var height_scale_ground: float = 0.90   # < 1.0 = slightly smaller on ground
+@export var height_scale_high: float = 6.00     # peak height target (~6x)
 
 # --- Quantize to keep pixels crisp ---
 @export_group("Depth Quantize")
@@ -53,13 +54,13 @@ signal out_of_play
 @export var roll_friction: float = 80.0
 @export var stop_speed_threshold: float = 30.0
 
-# --- Shadow control (smaller + slide down-left with "height") ---
+# --- Shadow control (ellipse via node scale; radius/alpha set by height) ---
 @export_group("Shadow")
 @export var shadow_enabled: bool = true
-@export var shadow_radius_min_px: float = 0.8
-@export var shadow_radius_max_px: float = 3.0
-@export var shadow_alpha_near: float = 0.70
-@export var shadow_alpha_far: float = 0.18
+@export var shadow_radius_min_px: float = 0.5    # smaller when high
+@export var shadow_radius_max_px: float = 5.0    # slightly bigger on ground
+@export var shadow_alpha_near: float = 0.75
+@export var shadow_alpha_far: float = 0.12
 @export var shadow_width_scale: float = 1.2
 @export var shadow_height_scale: float = 0.4
 @export var shadow_y_offset: float = 0.0
@@ -125,7 +126,10 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 	_reset_state()
 	global_position = start_global
 	_start_pos = start_global
-	_velocity = direction.normalized() * (speed if custom_speed <= 0.0 else custom_speed)
+	if custom_speed <= 0.0:
+		_velocity = direction.normalized() * speed
+	else:
+		_velocity = direction.normalized() * custom_speed
 	_active = true
 	_is_hit = false
 	_delivery = "pitch"
@@ -156,10 +160,14 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	_start_spin()
 
 	var label := String(meta.get("type", "liner"))
-	if label == "grounder": _kind = KIND_GROUNDER
-	elif label == "fly":     _kind = KIND_FLY
-	elif label == "blast":   _kind = KIND_BLAST
-	else:                    _kind = KIND_LINER
+	if label == "grounder":
+		_kind = KIND_GROUNDER
+	elif label == "fly":
+		_kind = KIND_FLY
+	elif label == "blast":
+		_kind = KIND_BLAST
+	else:
+		_kind = KIND_LINER
 
 	if _kind == KIND_GROUNDER:
 		_bounces_left = bounce_count_min + (randi() % max(1, bounce_count_max - bounce_count_min + 1))
@@ -175,8 +183,11 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	_update_depth_scale()
 	_update_shadow()
 
-func mark_thrown() -> void: _delivery = "throw"
-func last_delivery() -> String: return _delivery
+func mark_thrown() -> void:
+	_delivery = "throw"
+
+func last_delivery() -> String:
+	return _delivery
 
 func _reset_state() -> void:
 	_distance_traveled = 0.0
@@ -193,7 +204,10 @@ func _start_spin() -> void:
 		var frames := anim.sprite_frames
 		var names := frames.get_animation_names()
 		if names.size() > 0:
-			anim.animation = "spin" if names.has("spin") else names[0]
+			if names.has("spin"):
+				anim.animation = "spin"
+			else:
+				anim.animation = names[0]
 			anim.speed_scale = anim_speed_scale
 			anim.play()
 			_spin_active = false
@@ -202,9 +216,11 @@ func _start_spin() -> void:
 	_spin_active = true
 
 func _stop_spin() -> void:
-	if anim: anim.stop()
+	if anim:
+		anim.stop()
 	_spin_active = false
-	if sprite: sprite.rotation = 0.0
+	if sprite:
+		sprite.rotation = 0.0
 
 func _process(delta: float) -> void:
 	if _spin_active and sprite:
@@ -217,7 +233,8 @@ func _process(delta: float) -> void:
 	_update_shadow()
 
 func _physics_process(delta: float) -> void:
-	if not _active: return
+	if not _active:
+		return
 	var step := _velocity * delta
 
 	# Optional swept motion
@@ -232,12 +249,16 @@ func _physics_process(delta: float) -> void:
 			var move_vec := step
 			if d < step.length():
 				var safe_d = max(0.0, d - sweep_epsilon)
-				move_vec = to_hit.normalized() * safe_d if safe_d > 0.0 else Vector2.ZERO
+				if safe_d > 0.0:
+					move_vec = to_hit.normalized() * safe_d
+				else:
+					move_vec = Vector2.ZERO
 			global_position += move_vec
 		else:
 			global_position += step
 	else:
-		if _sweep: _sweep.enabled = false
+		if _sweep:
+			_sweep.enabled = false
 		global_position += step
 
 	_distance_traveled += step.length()
@@ -308,33 +329,51 @@ func _end_play() -> void:
 
 # ---------- Depth & Shadow ----------
 func _update_depth_scale() -> void:
-	# Base “distance from camera” scale by y (what you already had)
-	var near_y := near_y_hit if _is_hit else near_y_pitch
-	var far_y := far_y_hit if _is_hit else far_y_pitch
-	var s_near := scale_near_hit if _is_hit else scale_near_pitch
-	var s_far := scale_far_hit if _is_hit else scale_far_pitch
+	# Distance-based scale by Y (keeps NES depth illusion)
+	var near_y: float
+	var far_y: float
+	var s_near: float
+	var s_far: float
+	if _is_hit:
+		near_y = near_y_hit
+		far_y = far_y_hit
+		s_near = scale_near_hit
+		s_far = scale_far_hit
+	else:
+		near_y = near_y_pitch
+		far_y = far_y_pitch
+		s_near = scale_near_pitch
+		s_far = scale_far_pitch
+
 	var t = clamp(inverse_lerp(far_y, near_y, global_position.y), 0.0, 1.0)
 	var s = lerp(s_far, s_near, t)
 
-	# Hit-depth boost (existing)
+	# Optional: initial shrink right after contact (you already had this)
 	if _is_hit and hit_depth_boost_time > 0.0:
 		var k = clamp(_hit_boost_t / hit_depth_boost_time, 0.0, 1.0)
 		var factor = lerp(1.0, hit_initial_shrink, k)
 		s *= factor
 
-	# NEW: “height” (z) pop — larger when high, smaller on grounders
-	var h := _estimate_height_norm()  # 0..1, peak around mid-flight
-	var z_scale = lerp(height_scale_ground, height_scale_high, h)
+	# Height pop for hits:
+	# h = 0 on ground → multiply by ~0.9 (slightly smaller),
+	# h = 1 at apex → multiply by ~6.0 (six times larger).
+	var h := _estimate_height_norm()  # 0..1, peak mid-flight
+	var z_scale := 1.0
+	if _is_hit:
+		z_scale = lerp(height_scale_ground, height_scale_high, h)
 	s *= z_scale
 
+	# Pixel-quantized scale for crisp sprites
 	if scale_quantize_step > 0.0:
 		s = round(s / scale_quantize_step) * scale_quantize_step
 	scale = Vector2.ONE * max(0.01, s)
 
 func _estimate_height_norm() -> float:
-	# 0..1 where 0 = on ground, 1 = at peak; already used by shadows
-	if not _is_hit: return 0.0
-	if _in_roll or _dropped: return 0.0
+	# 0..1 where 0 = on ground, 1 = at peak; already used by shadow and z pop
+	if not _is_hit:
+		return 0.0
+	if _in_roll or _dropped:
+		return 0.0
 	var air_len = max(1.0, max_travel - drop_trigger_px)
 	var u: float
 	if _kind == KIND_GROUNDER:
@@ -345,21 +384,32 @@ func _estimate_height_norm() -> float:
 		u = clamp(_distance_traveled / air_len, 0.0, 1.0)
 	var hump := 4.0 * u * (1.0 - u) # 0..1 with peak at u=0.5
 	var k := 0.5
-	if _kind == KIND_GROUNDER: k = 0.15
-	elif _kind == KIND_LINER:   k = 0.45
-	elif _kind == KIND_FLY:     k = 0.80
-	elif _kind == KIND_BLAST:   k = 1.00
+	if _kind == KIND_GROUNDER:
+		k = 0.15
+	elif _kind == KIND_LINER:
+		k = 0.45
+	elif _kind == KIND_FLY:
+		k = 0.80
+	elif _kind == KIND_BLAST:
+		k = 1.00
 	return clamp(hump * k, 0.0, 1.0)
 
 func _update_shadow() -> void:
-	if not shadow_enabled or shadow == null: return
+	if not shadow_enabled or shadow == null:
+		return
 	var h := _estimate_height_norm()
+	# radius: bigger on ground (h=0), smaller in air (h=1)
 	var radius = lerp(shadow_radius_max_px, shadow_radius_min_px, h)
+	# alpha: darker on ground, faint aloft
 	var alpha = lerp(shadow_alpha_near, shadow_alpha_far, h)
-	if shadow.has_method("set_shape"): shadow.set_shape(radius, alpha)
+	if shadow.has_method("set_shape"):
+		shadow.set_shape(radius, alpha)
+
+	# Ellipse aspect & positional slide
 	shadow.scale = Vector2(shadow_width_scale, shadow_height_scale)
 	var dir := shadow_dir
-	if dir.length() > 0.001: dir = dir.normalized()
+	if dir.length() > 0.001:
+		dir = dir.normalized()
 	var slide := dir * shadow_slide_per_height_px * h
 	shadow.position = shadow_base_offset + Vector2(0, shadow_y_offset) + slide
 	shadow.z_index = -1

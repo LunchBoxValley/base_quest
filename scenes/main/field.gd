@@ -9,6 +9,7 @@ signal home_run
 @export var first_base_path: NodePath
 @export var second_base_path: NodePath
 @export var third_base_path: NodePath
+@export var pitcher_path: NodePath   # NEW: fallback throw target if 1B isn’t available
 
 @export_group("Layout Size (global px)")
 @export var desired_field_size: Vector2 = Vector2(640, 360)
@@ -230,3 +231,39 @@ func _draw() -> void:
 		draw_circle(F, 3.0, Color(0.8,1,0.8,0.9))
 		draw_circle(S, 3.0, Color(0.8,0.8,1,0.9))
 		draw_circle(T, 3.0, Color(1,0.8,0.8,0.9))
+
+
+# ---------------- Tiny throw-target helpers (no behavior change elsewhere) ----
+
+## Returns the force base (1B). If not set/found, falls back to the pitcher.
+## If both are missing, returns self to avoid nulls.
+func choose_force_base(ball: Node) -> Node:
+	var base1 := _get_node_safe(first_base_path)
+	if base1 == null:
+		base1 = _find_node_by_name("Base1")
+	if base1 != null:
+		return base1
+
+	var pitcher := _get_node_safe(pitcher_path)
+	if pitcher != null:
+		return pitcher
+
+	return self
+
+## Single entrypoint for callers; currently identical to choose_force_base.
+func choose_throw_target(ball: Node, fielder: Node = null) -> Node:
+	return choose_force_base(ball)
+
+# Safe lookups used by the helpers
+func _get_node_safe(p: NodePath) -> Node:
+	if p == NodePath():
+		return null
+	if has_node(p):
+		return get_node(p)
+	return null
+
+func _find_node_by_name(target: String) -> Node:
+	var root := get_tree().get_root()
+	if root == null:
+		return null
+	return root.find_child(target, true, false)

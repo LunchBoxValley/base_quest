@@ -13,5 +13,6 @@ func set_shape(radius_px: float, alpha: float) -> void:
 	queue_redraw()
 
 func _draw() -> void:
-	var c := Color(color.r, color.g, color.b, _alpha)
+	# Respect the exported color’s alpha as a master tint
+	var c := Color(color.r, color.g, color.b, color.a * _alpha)
 	draw_circle(Vector2.ZERO, _radius, c)
