@@ -9,7 +9,7 @@ signal home_run
 @export var first_base_path: NodePath
 @export var second_base_path: NodePath
 @export var third_base_path: NodePath
-@export var pitcher_path: NodePath   # Fallback throw target if 1B isn’t available
+@export var pitcher_path: NodePath
 
 @export_group("Layout Size (global px)")
 @export var desired_field_size: Vector2 = Vector2(640, 360)
@@ -34,11 +34,16 @@ signal home_run
 @export var hr_hitstop_sec: float = 1.6
 
 @export_group("Outfield Walls")
-@export var back_wall_height_px: float = 12.0     # Back wall band (down from HR line), across fair
-@export var side_wall_height_px: float = 8.0      # NEW: side posts height (down from HR line)
-@export var side_wall_width_px: float = 4.0       # NEW: side posts width (outside the foul line)
-@export var wall_bounce_damping: float = 0.85     # Speed retained after bounce (0..1)
-@export var wall_random_angle_deg: float = 12.0   # Mild ricochet variance
+@export var back_wall_height_px: float = 12.0
+@export var side_wall_height_px: float = 8.0
+@export var side_wall_width_px: float = 4.0
+@export var wall_bounce_damping: float = 0.85
+@export var wall_random_angle_deg: float = 12.0
+
+@export_group("HR Tuning")
+@export var hr_clearance_bias_px: float = 0.0           # optional nudge; can be 0 now that z is real
+@export var debug_force_hr_clear: bool = false          # when true, treat any *airborne* ball as clearing
+@export var debug_force_requires_air: bool = true       # prevents rollers from counting with debug
 
 var _plate: Node2D
 var _ball: Node2D = null
@@ -71,7 +76,7 @@ func reconfigure_layout() -> void:
 	left_foul_pole  = Vector2(world_bounds.position.x + side_margin_px, outfield_wall_y)
 	right_foul_pole = Vector2(world_bounds.position.x + world_bounds.size.x - side_margin_px, outfield_wall_y)
 
-	var dir_left  := (left_foul_pole  - home)
+	var dir_left := (left_foul_pole - home)
 	var dir_right := (right_foul_pole - home)
 	if dir_left.length() > 0.0001:
 		dir_left = dir_left.normalized()
@@ -95,12 +100,9 @@ func reconfigure_layout() -> void:
 	var first  := get_node_or_null(first_base_path)  as Node2D
 	var second := get_node_or_null(second_base_path) as Node2D
 	var third  := get_node_or_null(third_base_path)  as Node2D
-	if first:
-		first.global_position  = first_pos
-	if second:
-		second.global_position = second_pos
-	if third:
-		third.global_position  = third_pos
+	if first:  first.global_position  = first_pos
+	if second: second.global_position = second_pos
+	if third:  third.global_position  = third_pos
 
 	if draw_debug:
 		queue_redraw()
@@ -108,11 +110,20 @@ func reconfigure_layout() -> void:
 func track_batted_ball(ball: Node2D) -> void:
 	_ball = ball
 	_tracking = is_instance_valid(_ball)
-	if _tracking and _ball.has_signal("out_of_play"):
+	if not _tracking:
+		return
+
+	# End-of-play cleanup
+	if _ball.has_signal("out_of_play"):
 		_ball.out_of_play.connect(func():
 			_tracking = false
 			_ball = null
 		)
+
+	# Wall-hit juice hook
+	if _ball.has_signal("wall_hit"):
+		if not _ball.is_connected("wall_hit", Callable(self, "_on_ball_wall_hit")):
+			_ball.connect("wall_hit", Callable(self, "_on_ball_wall_hit"))
 
 func _physics_process(_delta: float) -> void:
 	if not _tracking or not is_instance_valid(_ball) or _plate == null:
@@ -125,41 +136,42 @@ func _physics_process(_delta: float) -> void:
 	var xl := _line_x_at_y(p, left_foul_pole, pos.y)
 	var xr := _line_x_at_y(p, right_foul_pole, pos.y)
 	if xl > xr:
-		var t := xl; xl = xr; xr = t
+		var tmp := xl; xl = xr; xr = tmp
 	xl -= foul_margin_px
 	xr += foul_margin_px
 
-	# 1) HR check (top cleared = HR)
+	# 1) Pure 2D HR (already above the top line)
 	if pos.y <= outfield_wall_y and pos.x >= xl and pos.x <= xr:
-		if not (_ball.has_meta("hr_announced") and _ball.get_meta("hr_announced")):
-			_ball.set_meta("hr_announced", true)
-			GameManager.call_hit(true)     # HUD HR strobe
-			_home_run_juice()
-		_end_play()
+		_award_hr_then_end()
 		return
 
-	# --------- WALLS ---------
-	# Back wall band (fair wedge only): bounces if below HR top but within band
+	# --------- BACK WALL BAND (height-aware) ---------
 	if pos.y > outfield_wall_y and pos.y <= outfield_wall_y + back_wall_height_px and pos.x >= xl and pos.x <= xr:
-		_bounce_ball(Vector2(0, 1)) # normal back toward the field
+		# Optional debug: only if airborne (prevents rollers becoming HR)
+		if debug_force_hr_clear:
+			var airborne_height := _safe_height_px()
+			if (not debug_force_requires_air) or airborne_height > 0.1:
+				_award_hr_then_end()
+				return
+		var height_px := _safe_height_px() + hr_clearance_bias_px
+		if height_px >= back_wall_height_px:
+			_award_hr_then_end()
+			return
+		_bounce_ball(Vector2(0, 1))
 		return
 
-	# Side posts (OUTSIDE the foul lines), small rectangles you can clear:
-	# Left post:   x in [xl - side_wall_width_px, xl), y in [outfield_wall_y, outfield_wall_y + side_wall_height_px]
-	# Right post:  x in (xr, xr + side_wall_width_px], y in [outfield_wall_y, outfield_wall_y + side_wall_height_px]
+	# --------- SIDE POSTS (outside foul lines) ---------
 	var y_low := outfield_wall_y
 	var y_high := outfield_wall_y + side_wall_height_px
 	if pos.y >= y_low and pos.y <= y_high:
-		# Left post
 		if pos.x >= xl - side_wall_width_px and pos.x < xl:
-			_bounce_ball(Vector2(1, 0))  # push inward
+			_bounce_ball(Vector2(1, 0))
 			return
-		# Right post
 		if pos.x > xr and pos.x <= xr + side_wall_width_px:
-			_bounce_ball(Vector2(-1, 0)) # push inward
+			_bounce_ball(Vector2(-1, 0))
 			return
 
-	# 2) FOUL (outside fair wedge and not handled by side posts)
+	# FOUL
 	if pos.x < xl or pos.x > xr:
 		if not (_ball.has_meta("ruled") and _ball.get_meta("ruled")):
 			_ball.set_meta("ruled", true)
@@ -167,10 +179,35 @@ func _physics_process(_delta: float) -> void:
 		_end_play()
 		return
 
-	# 3) Safety: if ball leaves world
+	# Safety: out of world
 	if not world_bounds.has_point(pos):
 		_end_play()
 		return
+
+func _safe_height_px() -> float:
+	if is_instance_valid(_ball) and _ball.has_method("get_height_px"):
+		return float(_ball.call("get_height_px"))
+	return 0.0
+
+func _award_hr_then_end() -> void:
+	if not (_ball.has_meta("hr_announced") and _ball.get_meta("hr_announced")):
+		_ball.set_meta("hr_announced", true)
+		GameManager.call_hit(true)
+		_home_run_juice()
+	_end_play()
+
+func _on_ball_wall_hit(_normal: Vector2) -> void:
+	# Camera micro-kick (lighter than HR)
+	var cam := get_tree().get_first_node_in_group("game_camera")
+	if cam and cam.has_method("kick"):
+		cam.kick(0.8, 0.06)
+	# Minimal screen flash (guarded)
+	var juice := get_node_or_null("/root/Juice")
+	if juice:
+		if juice.has_method("flash"):
+			juice.call("flash", Color(1,1,1,0.25), 0.05)
+		elif juice.has_method("strobe"):
+			juice.call("strobe", [Color(1,1,1,0.20), Color(1,1,1,0.10)], 0.08, 0.04)
 
 func _bounce_ball(normal: Vector2) -> void:
 	if is_instance_valid(_ball) and _ball.has_method("wall_bounce"):
@@ -248,7 +285,7 @@ func _draw() -> void:
 	var back_rect := Rect2(Vector2(wl.x, outfield_wall_y), Vector2(wr.x - wl.x, back_wall_height_px))
 	draw_rect(Rect2(to_local(back_rect.position), back_rect.size), Color(0.1,0.9,0.4,0.10), true)
 
-	# Side posts (debug)
+	# Side posts (debug) — outside foul lines
 	var p := _plate.global_position
 	var xl := _line_x_at_y(p, left_foul_pole, outfield_wall_y)
 	var xr := _line_x_at_y(p, right_foul_pole, outfield_wall_y)
@@ -273,29 +310,3 @@ func _draw() -> void:
 		draw_circle(F, 3.0, Color(0.8,1,0.8,0.9))
 		draw_circle(S, 3.0, Color(0.8,0.8,1,0.9))
 		draw_circle(T, 3.0, Color(1,0.8,0.8,0.9))
-
-# ---------------- Throw-target helpers (compat-friendly) ----------------
-
-## Accept and ignore any argument for compatibility (e.g., team_id int).
-func choose_force_base(_ignored: Variant = null) -> Node:
-	var base1 := get_node_or_null(first_base_path)
-	if base1 == null:
-		base1 = _find_node_by_name("Base1")
-	if base1 != null:
-		return base1
-
-	var pitcher := get_node_or_null(pitcher_path)
-	if pitcher != null:
-		return pitcher
-
-	return self
-
-## Accept and ignore caller args as well.
-func choose_throw_target(_ignored: Variant = null, _fielder: Variant = null) -> Node:
-	return choose_force_base()
-
-func _find_node_by_name(target: String) -> Node:
-	var root := get_tree().get_root()
-	if root == null:
-		return null
-	return root.find_child(target, true, false)
