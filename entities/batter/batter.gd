@@ -158,6 +158,7 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	var rad := deg_to_rad(angle_deg)
 	var up := sin(rad)
 	var side_mag = max(0.2, cos(rad))
+
 	var side_sign := (-1.0 if side_mix < 0.0 else 1.0)
 	var side_amount = abs(side_mix)
 
@@ -177,7 +178,26 @@ func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	var travel := randf_range(profile.travel_px.x, profile.travel_px.y)
 	travel *= lerp(0.90, 1.06, q)
 
-	var meta := {"label": profile.label, "type": profile.label, "angle_deg": angle_deg}
+	# ------- META passed to Ball.deflect -------
+	# PATCH: feed Ball a quality token so its HR boosts actually engage
+	var quality := "okay"
+	if q >= 0.96:
+		quality = "perfect"
+	elif q >= 0.86:
+		quality = "good"
+	elif q >= 0.72:
+		quality = "okay"
+	else:
+		quality = ("late" if offset > 0.0 else "early")
+
+	var meta := {
+		"label": profile.label,
+		"type": profile.label,
+		"angle_deg": angle_deg,
+		"delivery": "hit",
+		"quality": quality,   # <<< PATCH: crucial for Ball’s HR logic
+		"q": q                # optional debug/telemetry
+	}
 
 	var argc := _get_method_argc(ball, "deflect")
 	if argc >= 3: ball.call("deflect", dir, ev, meta)
@@ -220,7 +240,9 @@ func _sample_contact_profile(q: float) -> Dictionary:
 		return {"label":"fly","angle_range":angle_fly,"ev_mul":ev_mul_fly,"travel_px":travel_fly}
 	else:
 		var t = clamp((q - 0.95) / 0.05, 0.0, 1.0)
-		var blast_p = lerp(0.008, 0.03, t)   # << super stingy
+		var blast_p = lerp(0.008, 0.03, t)
+		# PATCH: double the blast probability curve (arcade lean-in), gently power-scaled
+		blast_p *= 2.0
 		blast_p *= clamp(0.70 + 0.30 * power_stat, 0.70, 1.05)
 		if randf() < blast_p:
 			return {"label":"blast","angle_range":angle_blast,"ev_mul":ev_mul_blast,"travel_px":travel_blast}

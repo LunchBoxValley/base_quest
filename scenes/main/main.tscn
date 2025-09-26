@@ -44,6 +44,7 @@ first_base_path = NodePath("../Entities/Base1")
 second_base_path = NodePath("../Entities/Base2")
 third_base_path = NodePath("../Entities/Base3")
 pitcher_path = NodePath("../Entities/Pitcher")
+hr_clearance_bias_px = 3.0
 
 [node name="Node" type="Node" parent="."]
 
@@ -85,6 +86,7 @@ pitcher_path = NodePath("../Pitcher")
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
 position = Vector2(153, 146)
+home_plate_path = NodePath("../../HomePlate")
 
 [node name="Base1" parent="Entities" instance=ExtResource("6_b1x3f")]
 position = Vector2(267, 40)

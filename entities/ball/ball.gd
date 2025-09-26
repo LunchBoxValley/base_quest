@@ -80,7 +80,7 @@ signal wall_hit(normal: Vector2)
 @export var apex_liner_px: float = 10.0
 @export var apex_fly_px: float = 24.0
 @export var apex_blast_px: float = 36.0
-@export var hr_height_multiplier: float = 1.0   # power-up friendly
+@export var hr_height_multiplier: float = 1.15   # PATCH: was 1.0 — gentle clearance nudge
 
 # --- Arcade HR Tuning (probability & boosts) ---
 @export_group("Arcade HR Tuning")
@@ -232,9 +232,8 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 			_velocity *= spd_mul
 			H += randf_range(hr_apex_bonus_px_range.x, hr_apex_bonus_px_range.y)
 			_max_travel_runtime += randf_range(hr_travel_bonus_px_range.x, hr_travel_bonus_px_range.y)
-			# bias kind for visuals/feel
-			if _kind != KIND_BLAST:
-				_kind = KIND_FLY
+			# PATCH: HR candidates should use BLAST arc, not FLY
+			_kind = KIND_BLAST
 
 	# Set z kinematics for hits
 	if _is_hit:

@@ -41,7 +41,7 @@ signal home_run
 @export var wall_random_angle_deg: float = 12.0
 
 @export_group("HR Tuning")
-@export var hr_clearance_bias_px: float = 0.0           # optional nudge; can be 0 now that z is real
+@export var hr_clearance_bias_px: float = 2.0           # was 0.0 — tiny clearance nudge, additive only
 @export var debug_force_hr_clear: bool = false          # when true, treat any *airborne* ball as clearing
 @export var debug_force_requires_air: bool = true       # prevents rollers from counting with debug
 

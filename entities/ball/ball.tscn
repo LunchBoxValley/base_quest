@@ -24,8 +24,9 @@ animations = [{
 [node name="Ball" type="Node2D"]
 z_index = 50
 script = ExtResource("1_61umk")
-max_travel = 300.0
-debug_power_hit = true
+hit_max_travel_base = 360.0
+hr_base_chance = 0.45
+hr_good_contact_bonus = 0.4
 
 [node name="Shadow" type="Node2D" parent="."]
 z_index = -1
