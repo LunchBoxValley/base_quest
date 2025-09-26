@@ -5,7 +5,7 @@ signal out_of_play
 signal wall_hit(normal: Vector2)
 
 @export var speed: float = 220.0
-@export var max_travel: float = 200.0
+@export var max_travel: float = 200.0   # baseline travel for pitches/throws
 
 # --- Spin (micro juice) ---
 @export_group("Spin")
@@ -30,8 +30,8 @@ signal wall_hit(normal: Vector2)
 
 # --- Height Scaling for sprite (visual “pop”) ---
 @export_group("Height Scaling")
-@export var height_scale_ground: float = 0.90   # smaller when hugging dirt
-@export var height_scale_high: float = 6.00     # ~6x at apex
+@export var height_scale_ground: float = 0.90
+@export var height_scale_high: float = 6.00
 
 # --- Quantize to keep pixels crisp ---
 @export_group("Depth Quantize")
@@ -73,21 +73,31 @@ signal wall_hit(normal: Vector2)
 @export var sweep_enable_speed: float = 220.0
 @export var sweep_epsilon: float = 0.5
 
-# --- NEW: Simple Z-Arc (vertical) ---
+# --- Simple Z-Arc (vertical) ---
 @export_group("Z Arc")
-@export var g_px_s2: float = 400.0              # gravity in "px per sec^2" for z axis
-@export var apex_grounder_px: float = 2.0       # approximate apex heights by type
+@export var g_px_s2: float = 400.0              # gravity along z
+@export var apex_grounder_px: float = 2.0
 @export var apex_liner_px: float = 10.0
 @export var apex_fly_px: float = 24.0
 @export var apex_blast_px: float = 36.0
-@export var hr_height_multiplier: float = 1.0   # power-up friendly: scales clearance height
+@export var hr_height_multiplier: float = 1.0   # power-up friendly
 
-# --- NEW: Inspector Power-Hit debug (easy dinger testing) ---
+# --- Arcade HR Tuning (probability & boosts) ---
+@export_group("Arcade HR Tuning")
+@export var hit_max_travel_base: float = 320.0     # ↑ farther baseline for hits
+@export var hr_base_chance: float = 0.25           # ↑ base HR-candidate chance
+@export var hr_good_contact_bonus: float = 0.35    # ↑ bonus on good/perfect
+@export var hr_speed_boost_range: Vector2 = Vector2(1.25, 1.55)     # ↑ hotter exit velo
+@export var hr_apex_bonus_px_range: Vector2 = Vector2(18.0, 36.0)   # ↑ higher apex
+@export var hr_travel_bonus_px_range: Vector2 = Vector2(100.0, 180.0) # ↑ longer carry
+@export var hr_perfect_guarantee: bool = true      # NEW: perfect contact always procs
+
+# --- Debug / Power Hit (still available) ---
 @export_group("Debug / Power Hit")
-@export var debug_power_hit: bool = false           # when true, all hits use boosted apex
-@export var debug_power_multiplier: float = 2.0     # scales apex height for hits
-@export var debug_force_air: bool = true            # ensure even “grounders” get some air when power is on
-@export var debug_min_air_px: float = 16.0          # minimum apex when power is on (helps clear 12px wall)
+@export var debug_power_hit: bool = false
+@export var debug_power_multiplier: float = 2.0
+@export var debug_force_air: bool = true
+@export var debug_min_air_px: float = 16.0
 
 # --- State ---
 var _velocity: Vector2 = Vector2.ZERO
@@ -110,7 +120,10 @@ const KIND_FLY := 2
 const KIND_BLAST := 3
 var _kind: int = KIND_LINER
 
-# Bounce / drop state (2D travel bookkeeping)
+# Distance control
+var _max_travel_runtime: float = 200.0
+
+# Bounce / drop state (2D travel)
 var _distance_traveled: float = 0.0
 var _last_bounce_at: float = 0.0
 var _next_bounce_spacing: float = 40.0
@@ -118,7 +131,7 @@ var _bounces_left: int = 0
 var _in_roll: bool = false
 var _dropped: bool = false
 
-# Node refs (optional)
+# Node refs
 @onready var anim: AnimatedSprite2D = $Anim
 @onready var sprite: Sprite2D = $Sprite
 @onready var trail: Line2D = $Trail
@@ -151,6 +164,7 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 	_active = true
 	_is_hit = false
 	_delivery = "pitch"
+	_max_travel_runtime = max_travel
 	visible = true
 	_start_spin()
 	_update_depth_scale()
@@ -159,7 +173,7 @@ func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom
 		trail.clear_points()
 		trail.add_point(global_position)
 
-# meta: {"type":"grounder"/"liner"/"fly"/"blast", "delivery":"hit"/"throw"/"pitch", ...}
+# meta: {"type":"grounder"/"liner"/"fly"/"blast", "delivery":"hit"/"throw"/"pitch", "quality":"late/okay/good/perfect", ...}
 func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> void:
 	_reset_state()
 	var delivery := String(meta.get("delivery", "hit")).to_lower()
@@ -177,7 +191,7 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	visible = true
 	_start_spin()
 
-	# Kind set
+	# Kind from meta (default = liner)
 	var label := String(meta.get("type", "liner"))
 	if label == "grounder":
 		_kind = KIND_GROUNDER
@@ -188,17 +202,42 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	else:
 		_kind = KIND_LINER
 
-	# Z-arc only for actual hits (not throws/pitches)
+	# --- Runtime travel baseline for *hits* ---
+	_max_travel_runtime = hit_max_travel_base
+
+	# Determine apex baseline by kind
+	var H := _apex_for_kind()
+
+	# Debug Power-Hit (optional)
+	if _is_hit and debug_power_hit:
+		H *= max(1.0, debug_power_multiplier)
+		if debug_force_air:
+			H = max(H, debug_min_air_px)
+
+	# --- Arcade HR proc (high-arcade odds) ---
 	if _is_hit:
-		var H := _apex_for_kind()
+		var quality := String(meta.get("quality", "okay")).to_lower()
+		var candidate := false
+		if hr_perfect_guarantee and quality == "perfect":
+			candidate = true
+		else:
+			var p := hr_base_chance
+			if quality == "good" or quality == "perfect":
+				p += hr_good_contact_bonus
+			candidate = randf() < clamp(p, 0.0, 1.0)
 
-		# Power-Hit debug: multiply apex and ensure a minimum air if desired
-		if debug_power_hit:
-			H *= max(1.0, debug_power_multiplier)
-			if debug_force_air:
-				H = max(H, debug_min_air_px)
+		if candidate:
+			# Promote toward a blast: speed, apex, travel distance
+			var spd_mul := randf_range(hr_speed_boost_range.x, hr_speed_boost_range.y)
+			_velocity *= spd_mul
+			H += randf_range(hr_apex_bonus_px_range.x, hr_apex_bonus_px_range.y)
+			_max_travel_runtime += randf_range(hr_travel_bonus_px_range.x, hr_travel_bonus_px_range.y)
+			# bias kind for visuals/feel
+			if _kind != KIND_BLAST:
+				_kind = KIND_FLY
 
-		# Z kinematics: H = vz^2 / (2g)  ->  vz = sqrt(2 g H)
+	# Set z kinematics for hits
+	if _is_hit:
 		_vz = sqrt(max(0.0, 2.0 * g_px_s2 * H))
 		_z = 0.0
 		_airborne = _vz > 0.0
@@ -207,7 +246,7 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 		_z = 0.0
 		_airborne = false
 
-	# Grounder/liner 2D bounce scheduling as before
+	# Grounder/liner 2D bounce scheduling
 	if _kind == KIND_GROUNDER:
 		_bounces_left = bounce_count_min + (randi() % max(1, bounce_count_max - bounce_count_min + 1))
 		_next_bounce_spacing = randf_range(bounce_spacing_px_min, bounce_spacing_px_max)
@@ -237,6 +276,7 @@ func _reset_state() -> void:
 	_z = 0.0
 	_vz = 0.0
 	_airborne = false
+	_max_travel_runtime = max_travel
 
 func _start_spin() -> void:
 	if anim and anim.sprite_frames:
@@ -300,9 +340,9 @@ func _physics_process(delta: float) -> void:
 			_z = 0.0
 			_airborne = false
 
-	# Late outfield drop for air balls (2D pacing kept)
+	# Late outfield drop pacing (2D)
 	if _is_hit and not _dropped and _kind != KIND_GROUNDER:
-		var remaining := max_travel - _distance_traveled
+		var remaining := _max_travel_runtime - _distance_traveled
 		if remaining <= drop_trigger_px:
 			_do_drop()
 
@@ -327,8 +367,8 @@ func _physics_process(delta: float) -> void:
 			return
 		_velocity = _velocity.normalized() * spd
 
-	# End by distance
-	if _distance_traveled >= max_travel and not _in_roll:
+	# End by distance (use runtime cap)
+	if _distance_traveled >= _max_travel_runtime and not _in_roll:
 		_end_play()
 
 func _do_bounce() -> void:
@@ -366,7 +406,6 @@ func _end_play() -> void:
 
 # ---------- Depth & Shadow ----------
 func _update_depth_scale() -> void:
-	# Base distance-from-camera scale by y
 	var near_y := near_y_hit if _is_hit else near_y_pitch
 	var far_y := far_y_hit if _is_hit else far_y_pitch
 	var s_near := scale_near_hit if _is_hit else scale_near_pitch
@@ -374,12 +413,10 @@ func _update_depth_scale() -> void:
 	var t = clamp(inverse_lerp(far_y, near_y, global_position.y), 0.0, 1.0)
 	var s = lerp(s_far, s_near, t)
 
-	# Early hit shrink
 	if _is_hit and hit_depth_boost_time > 0.0:
 		var k = clamp(_hit_boost_t / hit_depth_boost_time, 0.0, 1.0)
 		s *= lerp(1.0, hit_initial_shrink, k)
 
-	# Z-based visual pop
 	var hn := get_height_norm()
 	var z_scale = lerp(height_scale_ground, height_scale_high, hn)
 	s *= z_scale
@@ -398,7 +435,8 @@ func _update_shadow() -> void:
 		shadow.set_shape(radius, alpha)
 	shadow.scale = Vector2(shadow_width_scale, shadow_height_scale)
 	var dir := shadow_dir
-	if dir.length() > 0.001: dir = dir.normalized()
+	if dir.length() > 0.001:
+		dir = dir.normalized()
 	var slide := dir * shadow_slide_per_height_px * hn
 	shadow.position = shadow_base_offset + Vector2(0, shadow_y_offset) + slide
 	shadow.z_index = -1
@@ -413,7 +451,6 @@ func _apex_for_kind() -> float:
 		_:             return apex_liner_px
 
 func get_height_px() -> float:
-	# Actual current z height in "pixels", scaled by power-up multiplier
 	return max(0.0, _z) * max(0.0, hr_height_multiplier)
 
 func get_height_norm() -> float:
@@ -426,13 +463,11 @@ func wall_bounce(normal: Vector2, damping: float = 0.85, random_angle_deg: float
 		return
 	var n := normal.normalized()
 	var v := _velocity
-	# Reflect velocity over the wall normal (z unaffected by vertical wall)
 	var r := v - 2.0 * v.dot(n) * n
 	var ang := deg_to_rad(randf_range(-random_angle_deg, random_angle_deg))
 	r = r.rotated(ang)
 	_velocity = r * clamp(damping, 0.0, 1.0)
 
-	# Keep it "in air" if it was; wall doesn't kill z
 	_is_hit = true
 	if _delivery != "throw":
 		_delivery = "hit"
