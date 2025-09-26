@@ -24,9 +24,12 @@ animations = [{
 [node name="Ball" type="Node2D"]
 z_index = 50
 script = ExtResource("1_61umk")
+apex_fly_px = 28.0
+apex_blast_px = 45.0
+hr_height_multiplier = 1.35
 hit_max_travel_base = 360.0
-hr_base_chance = 0.45
-hr_good_contact_bonus = 0.4
+hr_base_chance = 0.55
+hr_good_contact_bonus = 0.55
 
 [node name="Shadow" type="Node2D" parent="."]
 z_index = -1

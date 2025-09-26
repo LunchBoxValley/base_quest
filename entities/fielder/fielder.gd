@@ -1,4 +1,4 @@
-extends CharacterBody2D
+extends CharacterBody2D 
 class_name Fielder
 
 @export_group("Team / Placement")
@@ -43,6 +43,9 @@ enum { S_IDLE, S_SEEK_BALL, S_CARRY, S_THROW, S_RETURN }
 var _state: int = S_IDLE
 var _move_target: Vector2 = Vector2.ZERO
 
+# --- Cover-base micro (state) ---
+var _cover_target: Node2D = null
+
 func _ready() -> void:
 	# Resolve refs
 	if home_marker_path != NodePath():
@@ -63,6 +66,7 @@ func _ready() -> void:
 		_timer.timeout.connect(_on_decide)
 	_timer.start()
 
+	add_to_group("fielders") # allow closest-fielders check
 	_enter_state(S_IDLE)
 
 func _physics_process(delta: float) -> void:
@@ -98,23 +102,29 @@ func _on_decide() -> void:
 
 	match _state:
 		S_IDLE:
-			# Only begin chasing **live hits**
-			if live and is_hit and _acquire_ball():
-				_claim_ball(_ball)                 # NEW: claim ownership
+			# Begin chasing live hits only if we're the CLOSEST fielder
+			if live and is_hit and _acquire_ball() and _can_chase_ball(_ball) and _i_am_closest_to_ball(_ball):
+				_claim_ball(_ball)                 # single-claimer: prevent dog-piles
 				_enter_state(S_SEEK_BALL)
 			else:
-				_set_target(_get_home_pos())
+				# Cover nearest unowned base (infield) or hold post (outfield)
+				_cover_tick(live, is_hit)
 
 		S_SEEK_BALL:
 			# Stop if play ended
 			if not live:
-				_release_ball_claim(_ball)        # NEW: let go of claim
+				_release_ball_claim(_ball)
 				_enter_state(S_RETURN)
 				return
-			# Stop if the ball is no longer a **hit** (e.g. it became a throw)
+			# Stop if no longer a **hit** (e.g., became a throw)
 			if not is_instance_valid(_ball) \
 			or not (_ball.has_method("last_delivery") and String(_ball.last_delivery()).to_lower() == "hit"):
-				_release_ball_claim(_ball)        # NEW
+				_release_ball_claim(_ball)
+				_enter_state(S_RETURN)
+				return
+			# If we are no longer the closest, back off
+			if not _i_am_closest_to_ball(_ball):
+				_release_ball_claim(_ball)
 				_enter_state(S_RETURN)
 				return
 
@@ -138,8 +148,13 @@ func _on_decide() -> void:
 			_enter_state(S_RETURN)
 
 		S_RETURN:
-			_set_target(_get_home_pos())
-			if global_position.distance_to(_get_home_pos()) <= stop_radius_px + 0.5:
+			# During live batted play, also participate in cover
+			_cover_tick(live, is_hit)
+			if not live or not is_hit:
+				# No live play—clear any cover claim and go home
+				_cover_release_all()
+				_set_target(_get_home_pos())
+			if global_position.distance_to(_get_home_pos()) <= stop_radius_px + 0.5 and (not live or not is_hit):
 				_enter_state(S_IDLE)
 
 # -------------------- Helpers --------------------
@@ -166,7 +181,30 @@ func _set_target(p: Vector2) -> void:
 	_move_target = p
 	# (Nav pathing hookup can go here later)
 
-# --- NEW: single-claimer system to prevent dog-piles ---
+# --- FieldJudge lookup (for throw advice; no base-path poking) ---
+func _resolve_field() -> Node:
+	if _field and is_instance_valid(_field):
+		return _field
+	var g := get_tree().get_first_node_in_group("field_judge")
+	if g:
+		_field = g
+	return _field
+
+# --- CLOSEST-FIELDER selection ---
+func _i_am_closest_to_ball(b: Node2D, slack_px: float = 6.0) -> bool:
+	if b == null or not is_instance_valid(b):
+		return false
+	var my_d := global_position.distance_to(b.global_position)
+	for n in get_tree().get_nodes_in_group("fielders"):
+		if n == self or not (n is Fielder):
+			continue
+		var other := n as Fielder
+		var od := other.global_position.distance_to(b.global_position)
+		if od + slack_px < my_d:
+			return false
+	return true
+
+# --- single-claimer system to prevent dog-piles ---
 func _can_chase_ball(b: Node) -> bool:
 	if b == null or not is_instance_valid(b):
 		return false
@@ -204,6 +242,7 @@ func _acquire_ball() -> bool:
 		var bb := n as Ball
 		if bb == null:
 			continue
+		# Respect single-claimer only (no zone gating)
 		if not _can_chase_ball(bb):
 			continue
 		var d := pos.distance_to(bb.global_position)
@@ -223,16 +262,17 @@ func _pickup_ball(ball: Ball) -> void:
 		return
 	_has_ball = true
 	_ball = ball
-	_release_ball_claim(ball)                        # NEW: we’re holding it now
+	_cover_release_all()                              # release cover when we take possession
+	_release_ball_claim(ball)                         # we’re holding it now
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
 	_ball.global_position = _glove.global_position
 
 func _choose_throw_target() -> Node2D:
 	# If FieldJudge provides advice, prefer it
-	if _field and _field.has_method("choose_force_base"):
+	if _resolve_field() and _field.has_method("choose_force_base"):
 		return _field.choose_force_base(team_id)
 
-	# NEW: default to throwing back to the pitcher (safer than hard-coded "Base1")
+	# default to throwing back to the pitcher (safer than hard-coded "Base1")
 	if _pitcher and is_instance_valid(_pitcher):
 		return _pitcher
 
@@ -274,12 +314,85 @@ func _release_and_deflect(dir: Vector2, spd: float, meta: Dictionary) -> void:
 	_ball.deflect(dir, spd, meta)
 	if _ball.has_method("mark_thrown"):
 		_ball.mark_thrown() # ensure last_delivery() reports "throw" even if deflect() overwrote it
+	_cover_release_all()                              # release any cover claim on throw
 	_has_ball = false
 	_ball = null
 
 func _on_ball_out_of_play() -> void:
 	_has_ball = false
-	_release_ball_claim(_ball)   # NEW: hygiene
+	_cover_release_all()
+	_release_ball_claim(_ball)   # hygiene
 	_ball = null
 	if _state != S_RETURN:
 		_enter_state(S_RETURN)
+
+# ---------------- Cover-Base (additive micro) ----------------
+func _cover_release_all() -> void:
+	# Release any base we previously claimed
+	if _cover_target and is_instance_valid(_cover_target):
+		if _cover_target.has_meta("coverer") and int(_cover_target.get_meta("coverer")) == get_instance_id():
+			_cover_target.remove_meta("coverer")
+	_cover_target = null
+
+func _get_bases() -> Array:
+	# Robust: rely on canonical scene names instead of FieldJudge internals
+	var bases: Array = []
+	var root := get_tree().get_current_scene()
+	if root:
+		var b1 := root.get_node_or_null(NodePath("Base1")) as Node2D
+		var b2 := root.get_node_or_null(NodePath("Base2")) as Node2D
+		var b3 := root.get_node_or_null(NodePath("Base3")) as Node2D
+		if b1: bases.append(b1)
+		if b2: bases.append(b2)
+		if b3: bases.append(b3)
+	return bases
+
+func _is_infielder() -> bool:
+	# Heuristic: infielders have home markers near one of the bases; outfielders are far.
+	var bases := _get_bases()
+	if _home_marker == null or bases.is_empty():
+		return true
+	for b in bases:
+		if _home_marker.global_position.distance_to((b as Node2D).global_position) <= 80.0:
+			return true
+	return false
+
+func _cover_tick(live: bool, is_hit: bool) -> void:
+	# Only during live batted plays; only for infielders; only when we don't own the chase
+	if not live or not is_hit or not _is_infielder():
+		_cover_release_all()
+		_set_target(_get_home_pos())
+		return
+
+	# If we’re the closest (and thus the chaser), don’t cover
+	if _ball and _i_am_closest_to_ball(_ball):
+		_cover_release_all()
+		return
+
+	# Pick nearest unowned base, claim it, and move there
+	var my_pos := global_position
+	var best: Node2D = null
+	var best_d := 1e9
+	for b in _get_bases():
+		var base := b as Node2D
+		if base == null:
+			continue
+		var claim = base.get_meta("coverer") if base.has_meta("coverer") else null
+		if claim != null and int(claim) != get_instance_id():
+			continue # already covered by someone else
+		var d := my_pos.distance_to(base.global_position)
+		if d < best_d:
+			best_d = d
+			best = base
+
+	if best != null:
+		# If switching bases, release old claim
+		if _cover_target and _cover_target != best:
+			_cover_release_all()
+		_cover_target = best
+		_cover_target.set_meta("coverer", get_instance_id())
+		_set_target(_cover_target.global_position)
+	else:
+		# Nothing to cover—return home
+		_cover_release_all()
+		_set_target(_get_home_pos())

@@ -1,125 +1,121 @@
-# BatSwoosh.gd — Godot 4.4.1 (no ternary)
-# Draws a quick multi-stroke arc that fades out (right-handed by default).
-
 extends Node2D
+class_name BatSwoosh
 
-@export var radius: float = 28.0        # arc radius (px)
-@export var arc_degrees: float = 120.0  # sweep size; bigger = longer arc
-@export var thickness: float = 6.0      # base line thickness
-@export var lines: int = 6              # how many parallel strokes
-@export var spread: float = 8.0         # pixel spread across the stroke bundle
-@export var color: Color = Color(1, 1, 1, 0.85)
-@export var duration: float = 0.12      # total life (seconds)
-@export var tail_shrink: float = 0.55   # how much the arc tail shortens over life (0..1)
-@export var jitter: float = 1.2         # tiny wobble so lines aren’t identical
-@export var right_handed: bool = true   # true = sweep across batter’s front from right shoulder
+@export_group("Look")
+@export var base_color: Color = Color(1, 1, 1, 0.9)
+@export var trail_color: Color = Color(1, 1, 1, 0.45)     # faint, wider pass for a soft edge
+@export var thickness_px: float = 6.0
+@export var extra_trail_width_px: float = 3.0            # adds to thickness for the faint pass
 
-var _t: float = 1.0       # life progress 0..1 (1 = inactive)
-var _seed: int = 0
+@export_group("Geometry")
+@export var radius_px: float = 24.0
+@export var start_angle_rad: float = deg_to_rad(-60.0)
+@export var end_angle_rad: float   = deg_to_rad(30.0)
+@export var center_offset: Vector2 = Vector2.ZERO        # local offset from this node's origin
+
+@export_group("Timing")
+@export var life_sec: float = 0.12                       # how long the swoosh stays visible
+@export var fade_out: bool = true
+
+@export_group("Quality")
+@export var max_step_deg: float = 6.0                    # segment size (smaller = smoother)
+@export var antialiased: bool = true
+
+var _t_left: float = 0.0
 
 func _ready() -> void:
-	visible = false
 	set_process(true)
 
-func fire() -> void:
-	_seed = randi()
-	_t = 0.0
-	visible = true
-	modulate.a = 1.0
-	queue_redraw()
-
 func _process(delta: float) -> void:
-	if _t >= 1.0:
-		return
-	_t = min(1.0, _t + delta / max(0.0001, duration))
-	modulate.a = 1.0 - _t
-	queue_redraw()
-	if _t >= 1.0:
-		visible = false
+	if _t_left > 0.0:
+		_t_left -= delta
+		if _t_left < 0.0:
+			_t_left = 0.0
+		queue_redraw()
 
 func _draw() -> void:
-	if _t >= 1.0:
+	if _t_left <= 0.0:
 		return
 
-	# Compute current sweep (Godot angles: 0° = +X, CW increases angle)
-	var sweep := deg_to_rad(arc_degrees * (1.0 - tail_shrink * _t))
-	var start_deg := -20.0
-	var end_rad := deg_to_rad(start_deg)
-	if right_handed:
-		end_rad += sweep
-	else:
-		end_rad -= sweep
+	var col_main := base_color
+	var col_trail := trail_color
+	if fade_out and life_sec > 0.0:
+		var k = clamp(_t_left / life_sec, 0.0, 1.0)
+		k = k * k # slight ease-out
+		col_main.a = base_color.a * k
+		col_trail.a = trail_color.a * k
 
-	var base_alpha := color.a * (1.0 - _t * 0.2)
-	var base_col := Color(color.r, color.g, color.b, base_alpha)
-	var base_thick = max(1.0, thickness * (1.0 - 0.6 * _t))
+	var pts := _compute_arc_points(center_offset, radius_px, start_angle_rad, end_angle_rad, max_step_deg)
+	if pts.size() < 2:
+		return
 
-	# Draw multiple slightly offset ribbons to fake particle streaks
-	for i in range(lines):
-		var k := 0.0
-		if lines > 1:
-			k = float(i) / float(lines - 1) - 0.5
-		var off := Vector2(0, k * spread)
+	# Soft “glow” pass (wider, faint)
+	var wide = max(1.0, thickness_px + extra_trail_width_px)
+	draw_polyline(pts, col_trail, wide, antialiased)
 
-		var noise := _rand_from_seed(1000 + _seed + i)
-		var th = base_thick * (0.9 + 0.2 * noise)
+	# Main pass (narrower, brighter)
+	draw_polyline(pts, col_main, max(1.0, thickness_px), antialiased)
 
-		var line_alpha = base_col.a * (0.85 - 0.6 * abs(k))
-		var col := Color(base_col.r, base_col.g, base_col.b, clampf(line_alpha, 0.0, 1.0))
+# ---------------- Public API ----------------
 
-		_draw_arc_stroke(off, radius, end_rad, th, col)
+# Fire a swoosh with optional overrides.
+func fire(
+	new_center_offset: Variant = null,
+	new_radius_px: float = -1.0,
+	new_start_angle_rad: float = INF,
+	new_end_angle_rad: float = INF,
+	new_thickness_px: float = -1.0,
+	new_color: Variant = null,
+	new_trail_color: Variant = null,
+	new_life_sec: float = -1.0
+) -> void:
+	if new_center_offset != null:
+		center_offset = new_center_offset
+	if new_radius_px > 0.0:
+		radius_px = new_radius_px
+	if new_start_angle_rad != INF:
+		start_angle_rad = new_start_angle_rad
+	if new_end_angle_rad != INF:
+		end_angle_rad = new_end_angle_rad
+	if new_thickness_px > 0.0:
+		thickness_px = new_thickness_px
+	if new_color != null and new_color is Color:
+		base_color = new_color
+	if new_trail_color != null and new_trail_color is Color:
+		trail_color = new_trail_color
+	if new_life_sec > 0.0:
+		life_sec = new_life_sec
 
-func _draw_arc_stroke(offset: Vector2, r: float, end_rad: float, base_thick: float, col: Color) -> void:
-	var segs := 18
-	var points: Array[Vector2] = []
-	points.resize(segs + 1)
+	_t_left = life_sec
+	queue_redraw()
 
-	for s in range(segs + 1):
-		var t := float(s) / float(segs)
-		var ang := end_rad * t
-		var ease := 0.85 + 0.15 * t
-		var rr := r * ease
-		var p := Vector2(cos(ang), sin(ang)) * rr + offset
-		# Tiny jitter to avoid perfectly clean lines
-		p += Vector2(_rand_from_seed(17 + s) * 0.6, _rand_from_seed(43 + s) * 0.6)
-		points[s] = p
+# Convenience: set arc from degrees (friendlier for tuning in code)
+func fire_deg(a0_deg: float, a1_deg: float, power_0_to_1: float = 1.0) -> void:
+	start_angle_rad = deg_to_rad(a0_deg)
+	end_angle_rad   = deg_to_rad(a1_deg)
+	thickness_px    = lerp(4.0, 8.0, clamp(power_0_to_1, 0.0, 1.0))
+	_t_left = life_sec
+	queue_redraw()
 
-	var ribbon := _polyline_to_ribbon(points, base_thick)
-	draw_colored_polygon(ribbon, col)
+# ---------------- Internals ----------------
 
-func _polyline_to_ribbon(pts: Array[Vector2], width: float) -> PackedVector2Array:
-	var half := width * 0.5
-	var left: PackedVector2Array = PackedVector2Array()
-	var right: PackedVector2Array = PackedVector2Array()
-	left.resize(pts.size())
-	right.resize(pts.size())
+func _compute_arc_points(center_local: Vector2, r: float, a0: float, a1: float, step_deg: float) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	if r <= 0.1:
+		return pts
+	var span := a1 - a0
+	if is_equal_approx(span, 0.0):
+		return pts
 
-	for i in range(pts.size()):
-		var p := pts[i]
-		var dir := Vector2()
-		if i == pts.size() - 1:
-			dir = p - pts[i - 1]
-		else:
-			if i == 0:
-				dir = pts[i + 1] - p
-			else:
-				dir = pts[i + 1] - pts[i - 1]
-		if dir.length() == 0.0:
-			dir = Vector2(1, 0)
-		var normal := Vector2(-dir.y, dir.x).normalized()
-		left[i] = p + normal * half
-		right[i] = p - normal * half
+	# Clamp span to a sane range
+	span = clamp(span, -TAU, TAU)
 
-	var poly: PackedVector2Array = PackedVector2Array()
-	poly.resize(left.size() + right.size())
-	for i in range(left.size()):
-		poly[i] = left[i]
-	for j in range(right.size()):
-		poly[left.size() + j] = right[right.size() - 1 - j]
-	return poly
+	var step_rad := deg_to_rad(clamp(step_deg, 1.0, 30.0))
+	var steps := maxi(2, int(ceil(abs(span) / step_rad)))
 
-func _rand_from_seed(n: int) -> float:
-	# Deterministic 0..1 noise based on _seed and input n
-	var x := int((_seed + n) & 0x7fffffff)
-	x = (x * 1103515245 + 12345) & 0x7fffffff
-	return float(x % 1000) / 1000.0
+	pts.resize(steps + 1)
+	for i in range(steps + 1):
+		var t := float(i) / float(steps)
+		var ang := a0 + span * t
+		pts[i] = center_local + Vector2(cos(ang), sin(ang)) * r
+	return pts

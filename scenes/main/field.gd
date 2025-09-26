@@ -45,10 +45,22 @@ signal home_run
 @export var debug_force_hr_clear: bool = false          # when true, treat any *airborne* ball as clearing
 @export var debug_force_requires_air: bool = true       # prevents rollers from counting with debug
 
+# ---------------- Zoning (infield/outfield + left/right) ----------------
+@export_group("Zoning / Fielders")
+@export var first_baseman_path: NodePath
+@export var second_baseman_path: NodePath
+@export var third_baseman_path: NodePath
+@export var left_fielder_path: NodePath
+@export var right_fielder_path: NodePath
+
+@export var infield_radius_px: float = 150.0   # <= infield, > outfield
+@export var zone_stickiness_px: float = 24.0   # keep current claimer if still competitive
+
 var _plate: Node2D
 var _ball: Node2D = null
 var _tracking := false
 var _hr_fx_running := false
+var _zone_claimer: Node = null  # soft memory to reduce thrash; optional
 
 func _ready() -> void:
 	_plate = get_node_or_null(home_plate_path)
@@ -276,6 +288,75 @@ func choose_force_base(team_id: int) -> Node:
 	if pitcher:
 		return pitcher
 	return null
+
+# ---------------- Zone Ownership API (additive) ----------------
+# Decide who should own a point on the field.
+func choose_zone_fielder_for_point(point: Vector2) -> Node:
+	var home := _plate if _plate else get_node_or_null(home_plate_path)
+	if home == null:
+		return null
+	var home_pos := (home as Node2D).global_position
+	var d := home_pos.distance_to(point)
+
+	# Infield: nearest of 1B/2B/3B to the point
+	if d <= infield_radius_px:
+		var best_node: Node = null
+		var best_dist := INF
+		for path in [first_base_path, second_base_path, third_base_path]:
+			var base := get_node_or_null(path) as Node2D
+			if base:
+				var dist := base.global_position.distance_to(point)
+				if dist < best_dist:
+					best_dist = dist
+					best_node = _fielder_from_base_path(path)
+		return best_node
+	# Outfield: left/right by side of home->second midline
+	else:
+		var second := get_node_or_null(second_base_path) as Node2D
+		var mid_dir := Vector2(0, -1)
+		if second:
+			mid_dir = (second.global_position - home_pos).normalized()
+		var to_point := (point - home_pos).normalized()
+		var cross := mid_dir.x * to_point.y - mid_dir.y * to_point.x
+		if cross > 0.0:
+			return get_node_or_null(left_fielder_path)
+		else:
+			return get_node_or_null(right_fielder_path)
+
+# Sticky assignment to reduce ping-pong at zone edges.
+func update_zone_claimer_for_point(point: Vector2) -> Node:
+	var candidate := choose_zone_fielder_for_point(point)
+	if _zone_claimer and candidate:
+		var cur_pos := _get_node_global_or_null(_zone_claimer)
+		var cand_pos := _get_node_global_or_null(candidate)
+		if cur_pos.x != INF and cand_pos.x != INF:
+			var cur_d := (cur_pos - point).length()
+			var new_d := (cand_pos - point).length()
+			if cur_d <= new_d + zone_stickiness_px:
+				return _zone_claimer
+	_zone_claimer = candidate
+	return _zone_claimer
+
+# Convenience: preferred chaser for a live ball.
+func choose_fielder_for_ball(ball: Node2D) -> Node:
+	if ball == null:
+		return null
+	return update_zone_claimer_for_point(ball.global_position)
+
+# Resolve from a base NodePath to its corresponding fielder NodePath.
+func _fielder_from_base_path(path: NodePath) -> Node:
+	if path == first_base_path:
+		return get_node_or_null(first_baseman_path)
+	if path == second_base_path:
+		return get_node_or_null(second_baseman_path)
+	if path == third_base_path:
+		return get_node_or_null(third_baseman_path)
+	return null
+
+func _get_node_global_or_null(n: Node) -> Vector2:
+	if n and n is Node2D:
+		return (n as Node2D).global_position
+	return Vector2(INF, INF)
 
 func _draw() -> void:
 	if not draw_debug or _plate == null:

@@ -123,13 +123,19 @@ func ai_swing_after(seconds: float) -> void:
 # -------- Contact & outcome --------
 func _on_contact(ball: Ball, hitpos: Vector2) -> void:
 	ball.set_meta("batted", true)
-	if has_node("BatSwoosh"): $BatSwoosh.fire()
 
 	# Timing quality 0..1 (1 = perfect)
 	var phase = 1.0 - clamp(_swing_t / max(0.0001, swing_window), 0.0, 1.0)
 	var offset = phase - sweet_spot_phase
 	var norm = clamp(abs(offset) / max(0.0001, sweet_width), 0.0, 1.0)
 	var q = 1.0 - norm
+
+	# 🔧 Bat swoosh (polyline) — center on bat_offset, thickness by quality
+	if has_node("BatSwoosh"):
+		var th = lerp(4.0, 8.0, clamp(q, 0.0, 1.0))
+		var a0 := deg_to_rad(-70.0)
+		var a1 := deg_to_rad( 40.0)
+		$BatSwoosh.fire(bat_offset, 22.0, a0, a1, th, Color(1,1,1,0.9), Color(1,1,1,0.4), 0.12)
 
 	# L/R bias blend: location + timing + spray + input/AI
 	var plate_x := (_plate.global_position.x if is_instance_valid(_plate) else global_position.x)
