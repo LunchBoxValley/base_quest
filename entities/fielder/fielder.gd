@@ -25,6 +25,10 @@ var _spawn_pos: Vector2 = Vector2.ZERO # fallback if no marker set
 @export_group("AI")
 @export var decision_interval_sec: float = 0.15
 
+@export_group("Pursuit")
+@export var pursuit_lead_sec: float = 0.25   # how far ahead (seconds) to lead the chase
+@export var pursuit_max_lead_px: float = 80  # clamp the lead distance for safety (0 = no clamp)
+
 # --- Node refs ---
 @onready var _nav: NavigationAgent2D = $Nav
 @onready var _glove: Node2D = $Glove
@@ -128,7 +132,8 @@ func _on_decide() -> void:
 				_enter_state(S_RETURN)
 				return
 
-			_set_target(_ball.global_position)
+			# Predictive pursuit (micro-step)
+			_set_target(_predict_ball_point(_ball))
 
 			# Pickup check
 			if is_instance_valid(_ball) \
@@ -203,6 +208,46 @@ func _i_am_closest_to_ball(b: Node2D, slack_px: float = 6.0) -> bool:
 		if od + slack_px < my_d:
 			return false
 	return true
+
+# --- Predictive pursuit helpers ---
+func _ball_velocity(b: Node2D) -> Vector2:
+	if b == null or not is_instance_valid(b):
+		return Vector2.ZERO
+	# Try common patterns defensively
+	if b.has_method("get_velocity"):
+		var v = b.call("get_velocity")
+		if typeof(v) == TYPE_VECTOR2:
+			return v
+	# Property probes (wrapped in try-catch style checks)
+	if "velocity" in b:
+		var vv = b.velocity
+		if typeof(vv) == TYPE_VECTOR2:
+			return vv
+	if "linear_velocity" in b:
+		var lv = b.linear_velocity
+		if typeof(lv) == TYPE_VECTOR2:
+			return lv
+	return Vector2.ZERO
+
+func _predict_ball_point(b: Node2D) -> Vector2:
+	if b == null or not is_instance_valid(b):
+		return global_position
+	var p := b.global_position
+	var v := _ball_velocity(b)
+	var lead = clamp(pursuit_lead_sec, 0.0, 0.5)
+	var pred = p + v * lead
+	if pursuit_max_lead_px > 0.0:
+		var offset = pred - p
+		if offset.length() > pursuit_max_lead_px:
+			pred = p + offset.normalized() * pursuit_max_lead_px
+	# Clamp to field bounds if available
+	var judge := _resolve_field()
+	if judge and judge.has_method("get"):
+		var wb = judge.get("world_bounds")
+		if typeof(wb) == TYPE_RECT2:
+			pred.x = clamp(pred.x, wb.position.x, wb.position.x + wb.size.x)
+			pred.y = clamp(pred.y, wb.position.y, wb.position.y + wb.size.y)
+	return pred
 
 # --- single-claimer system to prevent dog-piles ---
 func _can_chase_ball(b: Node) -> bool:
