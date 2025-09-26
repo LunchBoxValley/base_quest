@@ -44,7 +44,6 @@ first_base_path = NodePath("../Entities/Base1")
 second_base_path = NodePath("../Entities/Base2")
 third_base_path = NodePath("../Entities/Base3")
 pitcher_path = NodePath("../Entities/Pitcher")
-hr_clearance_bias_px = 3.0
 
 [node name="Node" type="Node" parent="."]
 

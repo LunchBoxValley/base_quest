@@ -147,7 +147,7 @@ func _physics_process(_delta: float) -> void:
 
 	# --------- BACK WALL BAND (height-aware) ---------
 	if pos.y > outfield_wall_y and pos.y <= outfield_wall_y + back_wall_height_px and pos.x >= xl and pos.x <= xr:
-		# Optional debug: only if airborne (prevents rollers becoming HR)
+		# Optional debug: only if airborne (prevents rollers from becoming HR)
 		if debug_force_hr_clear:
 			var airborne_height := _safe_height_px()
 			if (not debug_force_requires_air) or airborne_height > 0.1:
@@ -263,6 +263,19 @@ func _hr_fx_coroutine() -> void:
 	if Engine.time_scale < 0.95:
 		Engine.time_scale = 1.0
 	_hr_fx_running = false
+
+# ---------------- Fielder Throw Target API (minimal, non-breaking) ----------------
+# Returns the best force-out base for the *batter-runner*.
+# For the current arcade flow (no existing runners), this is First Base.
+# Falls back to the Pitcher if First Base isn't available; else returns null.
+func choose_force_base(team_id: int) -> Node:
+	var base1 := get_node_or_null(first_base_path)
+	if base1:
+		return base1
+	var pitcher := get_node_or_null(pitcher_path)
+	if pitcher:
+		return pitcher
+	return null
 
 func _draw() -> void:
 	if not draw_debug or _plate == null:
