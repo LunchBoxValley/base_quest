@@ -82,6 +82,13 @@ signal wall_hit(normal: Vector2)
 @export var apex_blast_px: float = 36.0
 @export var hr_height_multiplier: float = 1.0   # power-up friendly: scales clearance height
 
+# --- NEW: Inspector Power-Hit debug (easy dinger testing) ---
+@export_group("Debug / Power Hit")
+@export var debug_power_hit: bool = false           # when true, all hits use boosted apex
+@export var debug_power_multiplier: float = 2.0     # scales apex height for hits
+@export var debug_force_air: bool = true            # ensure even “grounders” get some air when power is on
+@export var debug_min_air_px: float = 16.0          # minimum apex when power is on (helps clear 12px wall)
+
 # --- State ---
 var _velocity: Vector2 = Vector2.ZERO
 var _active: bool = false
@@ -181,11 +188,24 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 	else:
 		_kind = KIND_LINER
 
-	# Z-arc: set vertical velocity to reach target apex H = vz^2 / (2g)
-	var H := _apex_for_kind()
-	_vz = sqrt(max(0.0, 2.0 * g_px_s2 * H))
-	_z = 0.0
-	_airborne = _vz > 0.0
+	# Z-arc only for actual hits (not throws/pitches)
+	if _is_hit:
+		var H := _apex_for_kind()
+
+		# Power-Hit debug: multiply apex and ensure a minimum air if desired
+		if debug_power_hit:
+			H *= max(1.0, debug_power_multiplier)
+			if debug_force_air:
+				H = max(H, debug_min_air_px)
+
+		# Z kinematics: H = vz^2 / (2g)  ->  vz = sqrt(2 g H)
+		_vz = sqrt(max(0.0, 2.0 * g_px_s2 * H))
+		_z = 0.0
+		_airborne = _vz > 0.0
+	else:
+		_vz = 0.0
+		_z = 0.0
+		_airborne = false
 
 	# Grounder/liner 2D bounce scheduling as before
 	if _kind == KIND_GROUNDER:
@@ -359,7 +379,7 @@ func _update_depth_scale() -> void:
 		var k = clamp(_hit_boost_t / hit_depth_boost_time, 0.0, 1.0)
 		s *= lerp(1.0, hit_initial_shrink, k)
 
-	# Z-based visual pop (0..1 by current apex of this hit type)
+	# Z-based visual pop
 	var hn := get_height_norm()
 	var z_scale = lerp(height_scale_ground, height_scale_high, hn)
 	s *= z_scale
