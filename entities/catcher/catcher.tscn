@@ -1,0 +1,85 @@
+[gd_scene load_steps=13 format=3 uid="uid://rfmir6wucwdm"]
+
+[ext_resource type="Texture2D" uid="uid://x7w2370dnhh" path="res://assets/sprites/Minifantasy_NPCsCarpenterIdle.png" id="1_06s2e"]
+[ext_resource type="Script" uid="uid://b6ebhv8303sqi" path="res://entities/catcher/catcher.gd" id="1_vgmj1"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vgmj1"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(0, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mybau"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(32, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vts71"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(64, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ackgg"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(96, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_shs8i"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(128, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_gqa43"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(160, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_e3tya"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(192, 64, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wxv2s"]
+atlas = ExtResource("1_06s2e")
+region = Rect2(224, 64, 32, 32)
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_atcq0"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_vgmj1")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_mybau")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_vts71")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_ackgg")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_shs8i")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_gqa43")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_e3tya")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_wxv2s")
+}],
+"loop": true,
+"name": &"idle",
+"speed": 5.0
+}]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_06s2e"]
+radius = 3.1622777
+
+[node name="Catcher" type="CharacterBody2D"]
+script = ExtResource("1_vgmj1")
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+sprite_frames = SubResource("SpriteFrames_atcq0")
+animation = &"idle"
+autoplay = "idle"
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_06s2e")
+disabled = true
+
+[node name="Decide" type="Timer" parent="."]

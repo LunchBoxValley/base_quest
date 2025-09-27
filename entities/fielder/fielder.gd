@@ -29,11 +29,24 @@ var _spawn_pos: Vector2 = Vector2.ZERO # fallback if no marker set
 @export var pursuit_lead_sec: float = 0.25   # how far ahead (seconds) to lead the chase
 @export var pursuit_max_lead_px: float = 80  # clamp the lead distance for safety (0 = no clamp)
 
+@export_group("Approach")
+@export var approach_slow_radius_px: float = 36.0   # start tapering speed inside this distance (when seeking ball)
+@export var approach_min_speed: float = 42.0        # floor speed near the ball to avoid jitter
+@export var soft_pickup_extra_radius_px: float = 4.0
+@export var soft_pickup_speed_thresh: float = 35.0  # if ball slower than this, allow extra pickup radius
+
 @export_group("Relay (optional)")
 @export var enable_relay: bool = false            # OFF by default; turn on to try cutoff/relay
 @export var deep_ball_min_dist_px: float = 180.0  # if ball is deeper than this from home, consider relay
 @export var relay_fraction_from_base: float = 0.35# 0..1, 0 near base, 1 near outfielder
 @export var relay_side_offset_px: float = 10.0    # perpendicular offset for spacing
+
+@export_group("Assisted Throwing")
+@export var prefer_first_on_hit: bool = true      # core rule: throw to 1B on live hit
+@export var fallback_to_pitcher: bool = true      # otherwise, throw to pitcher
+
+@export_group("Debug")
+@export var debug_prints: bool = false
 
 # --- Node refs ---
 @onready var _nav: NavigationAgent2D = $Nav
@@ -60,6 +73,9 @@ var _cover_target: Node2D = null
 var _relay_active: bool = false
 var _relay_target: Vector2 = Vector2.ZERO
 
+# --- Throw decision cache (prevents random target flips) ---
+var _throw_target: Node2D = null
+
 func _ready() -> void:
 	# Resolve refs
 	if home_marker_path != NodePath():
@@ -71,8 +87,7 @@ func _ready() -> void:
 
 	if field_path != NodePath():
 		_field = get_node_or_null(field_path)
-	if pitcher_path != NodePath():
-		_pitcher = get_node_or_null(pitcher_path) as Node2D
+	_resolve_pitcher_if_needed()
 
 	_timer.wait_time = max(0.06, decision_interval_sec)
 	_timer.one_shot = false
@@ -88,12 +103,22 @@ func _physics_process(delta: float) -> void:
 	if _has_ball and is_instance_valid(_ball):
 		_ball.global_position = _glove.global_position + carry_offset_px
 
-	# Simple steering towards move target
+	# Simple steering towards move target, with arrival braking during S_SEEK_BALL
 	var to_target := (_move_target - global_position)
 	var dist := to_target.length()
+	var desired_speed := move_speed
+
+	if _state == S_SEEK_BALL:
+		var pred := _predict_ball_point(_ball) if is_instance_valid(_ball) else _move_target
+		var d_to_pred := global_position.distance_to(pred)
+		if d_to_pred < approach_slow_radius_px:
+			var t = clamp(d_to_pred / max(0.001, approach_slow_radius_px), 0.0, 1.0)
+			desired_speed = lerp(approach_min_speed, move_speed, t)
+
 	var desired := Vector2.ZERO
 	if dist > stop_radius_px:
-		desired = to_target.normalized() * move_speed
+		desired = to_target.normalized() * desired_speed
+
 	var dv := desired - velocity
 	var max_step := accel * delta
 	if dv.length() > max_step:
@@ -110,9 +135,7 @@ func _on_decide() -> void:
 		_acquire_ball()
 
 	var live := GameManager.play_active
-	var is_hit := false
-	if is_instance_valid(_ball) and _ball.has_method("last_delivery"):
-		is_hit = String(_ball.last_delivery()).to_lower() == "hit"
+	var is_hit := _is_live_hit()
 
 	match _state:
 		S_IDLE:
@@ -132,8 +155,7 @@ func _on_decide() -> void:
 				_enter_state(S_RETURN)
 				return
 			# Stop if no longer a **hit** (e.g., became a throw)
-			if not is_instance_valid(_ball) \
-			or not (_ball.has_method("last_delivery") and String(_ball.last_delivery()).to_lower() == "hit"):
+			if not is_instance_valid(_ball) or not _is_live_hit():
 				_release_ball_claim(_ball)
 				_enter_state(S_RETURN)
 				return
@@ -146,11 +168,14 @@ func _on_decide() -> void:
 			# Predictive pursuit (micro-step)
 			_set_target(_predict_ball_point(_ball))
 
-			# Pickup check
-			if is_instance_valid(_ball) \
-			and global_position.distance_to(_ball.global_position) <= pickup_radius_px:
-				_pickup_ball(_ball)
-				_enter_state(S_THROW)
+			# Pickup check (with gentle scoop)
+			if is_instance_valid(_ball):
+				var pr := pickup_radius_px
+				if _ball_speed(_ball) <= soft_pickup_speed_thresh:
+					pr += soft_pickup_extra_radius_px
+				if global_position.distance_to(_ball.global_position) <= pr:
+					_pickup_ball(_ball)
+					_enter_state(S_THROW)
 
 		S_CARRY:
 			_enter_state(S_THROW)
@@ -159,7 +184,8 @@ func _on_decide() -> void:
 			if not _has_ball:
 				_enter_state(S_RETURN)
 				return
-			var target := _choose_throw_target()
+			# Use cached target chosen at pickup time (no re-rolls)
+			var target := _throw_target if _throw_target != null else _choose_throw_target()
 			_do_throw_to(target)
 			_enter_state(S_RETURN)
 
@@ -208,6 +234,23 @@ func _resolve_field() -> Node:
 		_field = g
 	return _field
 
+# --- Pitcher resolution (robust) ---
+func _resolve_pitcher_if_needed() -> void:
+	# 1) Explicit path
+	if _pitcher == null and pitcher_path != NodePath():
+		_pitcher = get_node_or_null(pitcher_path) as Node2D
+	# 2) Group-based
+	if _pitcher == null:
+		var g := get_tree().get_first_node_in_group("pitcher")
+		if g == null:
+			g = get_tree().get_first_node_in_group("pitchers")
+		_pitcher = g as Node2D
+	# 3) Name fallback
+	if _pitcher == null:
+		var root := get_tree().get_current_scene()
+		if root:
+			_pitcher = root.get_node_or_null(NodePath("Pitcher")) as Node2D
+
 # --- CLOSEST-FIELDER selection ---
 func _i_am_closest_to_ball(b: Node2D, slack_px: float = 6.0) -> bool:
 	if b == null or not is_instance_valid(b):
@@ -241,12 +284,10 @@ func _current_chaser(b: Node2D) -> Fielder:
 func _ball_velocity(b: Node2D) -> Vector2:
 	if b == null or not is_instance_valid(b):
 		return Vector2.ZERO
-	# Try common patterns defensively
 	if b.has_method("get_velocity"):
 		var v = b.call("get_velocity")
 		if typeof(v) == TYPE_VECTOR2:
 			return v
-	# Probe common property names safely
 	var vv = b.get("velocity")
 	if typeof(vv) == TYPE_VECTOR2:
 		return vv
@@ -254,6 +295,9 @@ func _ball_velocity(b: Node2D) -> Vector2:
 	if typeof(lv) == TYPE_VECTOR2:
 		return lv
 	return Vector2.ZERO
+
+func _ball_speed(b: Node2D) -> float:
+	return _ball_velocity(b).length()
 
 func _predict_ball_point(b: Node2D) -> Vector2:
 	if b == null or not is_instance_valid(b):
@@ -338,58 +382,113 @@ func _pickup_ball(ball: Ball) -> void:
 	_release_ball_claim(ball)                         # we’re holding it now
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
 	_ball.global_position = _glove.global_position
+	# Decide the throw **once** right now
+	_throw_target = _choose_throw_target()
 
 func _choose_throw_target() -> Node2D:
-	# If FieldJudge provides advice, prefer it
-	if _resolve_field() and _field.has_method("choose_force_base"):
-		return _field.choose_force_base(team_id)
-
-	# default to throwing back to the pitcher (safer than hard-coded "Base1")
-	if _pitcher and is_instance_valid(_pitcher):
+	# Assisted: on ANY live hit -> 1B; else -> pitcher.
+	var base1 := _get_base1()
+	if prefer_first_on_hit and _is_live_hit() and base1:
+		return base1
+	_resolve_pitcher_if_needed()
+	if fallback_to_pitcher and _pitcher and is_instance_valid(_pitcher):
 		return _pitcher
+	return base1
 
-	# Legacy fallback: first base, if present
+func _get_base1() -> Node2D:
 	var root := get_tree().get_current_scene()
-	var b1 := root.get_node_or_null(NodePath("Base1")) as Node2D
-	return b1 if b1 != null else root
+	if root == null:
+		return null
+	return root.get_node_or_null(NodePath("Base1")) as Node2D
 
+# ------------ THROW: force flat/no-randomness for pitcher ------------
 func _do_throw_to(target: Node2D) -> void:
 	if not is_instance_valid(_ball) or not _has_ball:
 		return
-	var dir := Vector2.DOWN
-	var spd := throw_speed_min
-	var label := "liner"
 
-	if target == _pitcher:
-		dir = Vector2.DOWN
-		spd = throw_speed_min
-		label = "liner"
+	_resolve_pitcher_if_needed()
+
+	var final_target: Node2D = null
+	if target != null and is_instance_valid(target):
+		final_target = target
 	else:
-		var vec := target.global_position - global_position
-		var dist := vec.length()
-		if dist <= 0.001:
-			dir = Vector2.DOWN
-		else:
-			dir = vec.normalized()
+		final_target = (_pitcher if (_pitcher != null and is_instance_valid(_pitcher)) else _get_base1())
+
+	if final_target == null or not is_instance_valid(final_target):
+		if debug_prints: print("[Fielder] ABORT throw: no valid target")
+		return
+
+	var is_pitcher := (final_target == _pitcher) \
+		|| final_target.is_in_group("pitcher") \
+		|| final_target.is_in_group("pitchers") \
+		|| String(final_target.name).to_lower() == "pitcher"
+
+	# Aim at glove if present
+	var aim_pos := final_target.global_position
+	var glove := final_target.get_node_or_null("Glove") as Node2D
+	if glove != null:
+		aim_pos = glove.global_position
+
+	var vec := aim_pos - global_position
+	var dist := vec.length()
+	var dir := Vector2.DOWN
+	if dist > 0.0001:
+		dir = vec / dist
+
+	var spd: float
+	if is_pitcher:
+		# Soft, catchable, time-based toss
+		var t_norm = clamp(inverse_lerp(40.0, 220.0, dist), 0.0, 1.0)
+		var desired_t = lerp(0.30, 0.38, t_norm)
+		spd = clamp(dist / max(0.001, desired_t), 110.0, 200.0)
+	else:
 		var t = clamp(inverse_lerp(40.0, 320.0, dist), 0.0, 1.0)
 		spd = lerp(throw_speed_min, throw_speed_max, t)
-		label = "liner"
-		if dist >= 160.0:
-			label = "fly"
 
-	# IMPORTANT: pass meta and then tag the ball as a throw, so other fielders won't chase it
-	_release_and_deflect(dir, spd, {"type": label, "delivery": "throw"})
+	if debug_prints:
+		print("[Fielder] Throw -> ", ( "Pitcher" if is_pitcher else String(final_target.name)),
+			" aim=", aim_pos, " dist=", dist, " spd=", spd, " dir=", dir)
 
-func _release_and_deflect(dir: Vector2, spd: float, meta: Dictionary) -> void:
+	# Flat/no-spin meta for pitcher; plain liner elsewhere
+	var meta := {
+		"delivery": "throw",
+		"type": "liner",
+		"arc": ( "flat" if is_pitcher else "normal" ),
+		"randomness": (0.0 if is_pitcher else 0.15),
+		"spin": (0.0 if is_pitcher else 0.1),
+		"assist": true
+	}
+	if is_pitcher:
+		meta["target"] = "pitcher"
+
 	_ball.process_mode = Node.PROCESS_MODE_INHERIT
 	_ball.global_position = _glove.global_position + dir * 2.0
-	_ball.deflect(dir, spd, meta)
+
+	if _ball.has_method("deflect"):
+		_ball.deflect(dir, spd, meta)
+	else:
+		# Fallback direct velocity set
+		if _ball.has_method("set_velocity"):
+			_ball.call("set_velocity", dir * spd)
+		elif _ball.has_method("set_linear_velocity"):
+			_ball.call("set_linear_velocity", dir * spd)
+		elif _ball.has_method("set"):
+			if typeof(_ball.get("velocity")) == TYPE_VECTOR2:
+				_ball.set("velocity", dir * spd)
+			elif typeof(_ball.get("linear_velocity")) == TYPE_VECTOR2:
+				_ball.set("linear_velocity", dir * spd)
+		_ball.set_meta("delivery", "throw")
+		_ball.set_meta("type", "liner")
+		_ball.set_meta("arc", "flat")
+
 	if _ball.has_method("mark_thrown"):
-		_ball.mark_thrown() # ensure last_delivery() reports "throw" even if deflect() overwrote it
+		_ball.mark_thrown() # ensure last_delivery() reports "throw"
+
 	_cover_release_all()
 	_relay_clear()
 	_has_ball = false
 	_ball = null
+	_throw_target = null
 
 func _on_ball_out_of_play() -> void:
 	_has_ball = false
@@ -561,3 +660,14 @@ func _relay_tick(live: bool, is_hit: bool) -> bool:
 	# Move to relay; do not claim the base (complements cover)
 	_set_target(_relay_target)
 	return true
+
+# ---------------- tiny utility ----------------
+func _is_live_hit() -> bool:
+	if not is_instance_valid(_ball):
+		return false
+	if not GameManager.play_active:
+		return false
+	if _ball.has_method("last_delivery"):
+		return String(_ball.last_delivery()).to_lower() == "hit"
+	# If Ball lacks the method, check meta used by Batter
+	return _ball.has_meta("batted") and bool(_ball.get_meta("batted"))

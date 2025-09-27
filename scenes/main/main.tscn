@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=4 uid="uid://h45lxg1qdbak"]
+[gd_scene load_steps=16 format=4 uid="uid://h45lxg1qdbak"]
 
 [ext_resource type="Script" uid="uid://b014w7kq08rme" path="res://scenes/main/field.gd" id="1_hujxm"]
 [ext_resource type="PackedScene" uid="uid://b3csctfbk3plb" path="res://entities/pitcher/pitcher.tscn" id="1_hyk8p"]
@@ -13,6 +13,7 @@
 [ext_resource type="TileSet" uid="uid://c4a31gbxicmfj" path="res://assets/tilemaps/main.tres" id="5_7smn1"]
 [ext_resource type="PackedScene" uid="uid://dfdc3plqb0gjy" path="res://entities/ball/ball.tscn" id="5_b1x3f"]
 [ext_resource type="PackedScene" uid="uid://ckg4eqtth6vr1" path="res://entities/base/base.tscn" id="6_b1x3f"]
+[ext_resource type="PackedScene" uid="uid://rfmir6wucwdm" path="res://entities/catcher/catcher.tscn" id="8_raeie"]
 [ext_resource type="PackedScene" uid="uid://coycmr61ev8wl" path="res://entities/fielder/fielder.tscn" id="10_7smn1"]
 
 [node name="Main" type="Node2D"]
@@ -71,6 +72,11 @@ position = Vector2(160, 150)
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
 
+[node name="Catcher" parent="Entities" instance=ExtResource("8_raeie")]
+position = Vector2(160, 168)
+field_path = NodePath("../Home_C")
+pitcher_path = NodePath("../Pitcher")
+
 [node name="Fielder" parent="Entities" instance=ExtResource("10_7smn1")]
 position = Vector2(252, 38)
 field_path = NodePath("../Home_1B")
@@ -97,7 +103,7 @@ field_path = NodePath("../Home_RF")
 pitcher_path = NodePath("../Pitcher")
 
 [node name="Batter" parent="Entities" instance=ExtResource("4_ow5a4")]
-position = Vector2(153, 146)
+position = Vector2(152, 145)
 home_plate_path = NodePath("../../HomePlate")
 
 [node name="Base1" parent="Entities" instance=ExtResource("6_b1x3f")]
@@ -119,8 +125,11 @@ charge_fx_path = NodePath("Hand/PitchCharge")
 [node name="PitchCharge" parent="Entities/Pitcher/Hand" index="0"]
 z_index = 40
 
-[node name="Catcher" type="Marker2D" parent="Entities"]
-position = Vector2(160, 157)
+[node name="CatchHelper" parent="Entities/Pitcher" index="2"]
+position = Vector2(0, 4)
+
+[node name="Home_C" type="Marker2D" parent="Entities"]
+position = Vector2(160, 172)
 
 [node name="Home_1B" type="Marker2D" parent="Entities"]
 position = Vector2(261, 43)

@@ -21,7 +21,7 @@ animations = [{
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_we1t7"]
 
-[node name="Ball" type="Node2D"]
+[node name="Ball" type="Node2D" groups=["balls"]]
 z_index = 50
 script = ExtResource("1_61umk")
 apex_fly_px = 28.0

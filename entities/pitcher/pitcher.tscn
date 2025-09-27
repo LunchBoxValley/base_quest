@@ -1,9 +1,10 @@
-[gd_scene load_steps=14 format=3 uid="uid://b3csctfbk3plb"]
+[gd_scene load_steps=15 format=3 uid="uid://b3csctfbk3plb"]
 
 [ext_resource type="Script" uid="uid://bofcigu3myv4a" path="res://entities/pitcher/pitcher.gd" id="1_wsxdh"]
 [ext_resource type="Texture2D" uid="uid://x7w2370dnhh" path="res://assets/sprites/Minifantasy_NPCsCarpenterIdle.png" id="2_5fwch"]
 [ext_resource type="Texture2D" uid="uid://dgbthj7syxatv" path="res://assets/sprites/spark.png" id="2_l6jpl"]
 [ext_resource type="Script" uid="uid://dprhhw21f2mtu" path="res://entities/pitcher/pitch_charge.gd" id="3_0a36j"]
+[ext_resource type="Script" uid="uid://cr0sjq7hsv1rb" path="res://entities/pitcher/catch_helper.gd" id="5_0a36j"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_ajnkh"]
 atlas = ExtResource("2_5fwch")
@@ -69,7 +70,7 @@ animations = [{
 "speed": 5.0
 }]
 
-[node name="Pitcher" type="Node2D"]
+[node name="Pitcher" type="Node2D" groups=["pitcher"]]
 z_index = 4
 script = ExtResource("1_wsxdh")
 
@@ -94,3 +95,10 @@ script = ExtResource("3_0a36j")
 sprite_frames = SubResource("SpriteFrames_towbv")
 animation = &"idle"
 autoplay = "idle"
+
+[node name="CatchHelper" type="Node2D" parent="."]
+script = ExtResource("5_0a36j")
+pitcher_path = NodePath("..")
+glove_path = NodePath("../Glove")
+
+[node name="Glove" type="Node2D" parent="."]
