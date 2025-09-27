@@ -29,6 +29,12 @@ var _spawn_pos: Vector2 = Vector2.ZERO # fallback if no marker set
 @export var pursuit_lead_sec: float = 0.25   # how far ahead (seconds) to lead the chase
 @export var pursuit_max_lead_px: float = 80  # clamp the lead distance for safety (0 = no clamp)
 
+@export_group("Relay (optional)")
+@export var enable_relay: bool = false            # OFF by default; turn on to try cutoff/relay
+@export var deep_ball_min_dist_px: float = 180.0  # if ball is deeper than this from home, consider relay
+@export var relay_fraction_from_base: float = 0.35# 0..1, 0 near base, 1 near outfielder
+@export var relay_side_offset_px: float = 10.0    # perpendicular offset for spacing
+
 # --- Node refs ---
 @onready var _nav: NavigationAgent2D = $Nav
 @onready var _glove: Node2D = $Glove
@@ -49,6 +55,10 @@ var _move_target: Vector2 = Vector2.ZERO
 
 # --- Cover-base micro (state) ---
 var _cover_target: Node2D = null
+
+# --- Relay micro (state) ---
+var _relay_active: bool = false
+var _relay_target: Vector2 = Vector2.ZERO
 
 func _ready() -> void:
 	# Resolve refs
@@ -111,8 +121,9 @@ func _on_decide() -> void:
 				_claim_ball(_ball)                 # single-claimer: prevent dog-piles
 				_enter_state(S_SEEK_BALL)
 			else:
-				# Cover nearest unowned base (infield) or hold post (outfield)
-				_cover_tick(live, is_hit)
+				# Relay takes precedence, else cover
+				if not _relay_tick(live, is_hit):
+					_cover_tick(live, is_hit)
 
 		S_SEEK_BALL:
 			# Stop if play ended
@@ -153,11 +164,13 @@ func _on_decide() -> void:
 			_enter_state(S_RETURN)
 
 		S_RETURN:
-			# During live batted play, also participate in cover
-			_cover_tick(live, is_hit)
+			# During live batted play, try relay first, else cover
+			if not _relay_tick(live, is_hit):
+				_cover_tick(live, is_hit)
 			if not live or not is_hit:
-				# No live play—clear any cover claim and go home
+				# No live play—clear any cover/relay claim and go home
 				_cover_release_all()
+				_relay_clear()
 				_set_target(_get_home_pos())
 			if global_position.distance_to(_get_home_pos()) <= stop_radius_px + 0.5 and (not live or not is_hit):
 				_enter_state(S_IDLE)
@@ -209,6 +222,21 @@ func _i_am_closest_to_ball(b: Node2D, slack_px: float = 6.0) -> bool:
 			return false
 	return true
 
+func _current_chaser(b: Node2D) -> Fielder:
+	if b == null or not is_instance_valid(b):
+		return null
+	var best: Fielder = null
+	var best_d := 1e9
+	for n in get_tree().get_nodes_in_group("fielders"):
+		if not (n is Fielder):
+			continue
+		var f := n as Fielder
+		var d := f.global_position.distance_to(b.global_position)
+		if d < best_d:
+			best_d = d
+			best = f
+	return best
+
 # --- Predictive pursuit helpers ---
 func _ball_velocity(b: Node2D) -> Vector2:
 	if b == null or not is_instance_valid(b):
@@ -218,15 +246,13 @@ func _ball_velocity(b: Node2D) -> Vector2:
 		var v = b.call("get_velocity")
 		if typeof(v) == TYPE_VECTOR2:
 			return v
-	# Property probes (wrapped in try-catch style checks)
-	if "velocity" in b:
-		var vv = b.velocity
-		if typeof(vv) == TYPE_VECTOR2:
-			return vv
-	if "linear_velocity" in b:
-		var lv = b.linear_velocity
-		if typeof(lv) == TYPE_VECTOR2:
-			return lv
+	# Probe common property names safely
+	var vv = b.get("velocity")
+	if typeof(vv) == TYPE_VECTOR2:
+		return vv
+	var lv = b.get("linear_velocity")
+	if typeof(lv) == TYPE_VECTOR2:
+		return lv
 	return Vector2.ZERO
 
 func _predict_ball_point(b: Node2D) -> Vector2:
@@ -308,6 +334,7 @@ func _pickup_ball(ball: Ball) -> void:
 	_has_ball = true
 	_ball = ball
 	_cover_release_all()                              # release cover when we take possession
+	_relay_clear()
 	_release_ball_claim(ball)                         # we’re holding it now
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
 	_ball.global_position = _glove.global_position
@@ -359,13 +386,15 @@ func _release_and_deflect(dir: Vector2, spd: float, meta: Dictionary) -> void:
 	_ball.deflect(dir, spd, meta)
 	if _ball.has_method("mark_thrown"):
 		_ball.mark_thrown() # ensure last_delivery() reports "throw" even if deflect() overwrote it
-	_cover_release_all()                              # release any cover claim on throw
+	_cover_release_all()
+	_relay_clear()
 	_has_ball = false
 	_ball = null
 
 func _on_ball_out_of_play() -> void:
 	_has_ball = false
 	_cover_release_all()
+	_relay_clear()
 	_release_ball_claim(_ball)   # hygiene
 	_ball = null
 	if _state != S_RETURN:
@@ -406,7 +435,8 @@ func _cover_tick(live: bool, is_hit: bool) -> void:
 	# Only during live batted plays; only for infielders; only when we don't own the chase
 	if not live or not is_hit or not _is_infielder():
 		_cover_release_all()
-		_set_target(_get_home_pos())
+		if not _relay_active:
+			_set_target(_get_home_pos())
 		return
 
 	# If we’re the closest (and thus the chaser), don’t cover
@@ -440,4 +470,94 @@ func _cover_tick(live: bool, is_hit: bool) -> void:
 	else:
 		# Nothing to cover—return home
 		_cover_release_all()
-		_set_target(_get_home_pos())
+		if not _relay_active:
+			_set_target(_get_home_pos())
+
+# ---------------- Relay (optional micro) ----------------
+func _relay_clear() -> void:
+	_relay_active = false
+	_relay_target = _get_home_pos()
+
+func _relay_tick(live: bool, is_hit: bool) -> bool:
+	if not enable_relay or not live or not is_hit or _ball == null or not is_instance_valid(_ball):
+		_relay_clear()
+		return false
+
+	# Find current chaser
+	var chaser := _current_chaser(_ball)
+	if chaser == null:
+		_relay_clear()
+		return false
+
+	# Only do relay if the chaser is NOT an infielder (i.e., it's an outfielder)
+	if chaser._is_infielder():
+		_relay_clear()
+		return false
+
+	# Only infielders participate as relay
+	if not _is_infielder():
+		_relay_clear()
+		return false
+
+	# Skip if we are the chaser (guard)
+	if chaser == self:
+		_relay_clear()
+		return false
+
+	# Deep ball check (distance from home plate proxy: average of Base1 and Base3)
+	var bases := _get_bases()
+	if bases.is_empty():
+		_relay_clear()
+		return false
+
+	# Approximate "home" as midpoint between Base1 and Base3 if plate is not directly available
+	var home_guess := global_position
+	var b1 := (bases[0] as Node2D) if bases.size() >= 1 else null
+	var b3 := (bases[2] as Node2D) if bases.size() >= 3 else null
+	if b1 and b3:
+		home_guess = (b1.global_position + b3.global_position) * 0.5
+	var ball_dist_home := _ball.global_position.distance_to(home_guess)
+	if ball_dist_home < deep_ball_min_dist_px:
+		_relay_clear()
+		return false
+
+	# Choose relay target base: right side to 1B, left side to 2B (simple, readable)
+	var plate_x := home_guess.x
+	var target_base: Node2D = null
+	var root := get_tree().get_current_scene()
+	var base1 := root.get_node_or_null(NodePath("Base1")) as Node2D
+	var base2 := root.get_node_or_null(NodePath("Base2")) as Node2D
+	if _ball.global_position.x >= plate_x and base1:
+		target_base = base1
+	elif base2:
+		target_base = base2
+	else:
+		_relay_clear()
+		return false
+
+	# Compute relay point along line (base -> chaser)
+	var a := target_base.global_position
+	var b := chaser.global_position
+	var frac = clamp(relay_fraction_from_base, 0.1, 0.9)
+	var p := a.lerp(b, frac)
+
+	# Perpendicular offset for lane spacing
+	var dir := (b - a).normalized()
+	var perp := Vector2(-dir.y, dir.x)
+	p += perp * relay_side_offset_px
+
+	# Optional clamp to field bounds
+	var judge := _resolve_field()
+	if judge and judge.has_method("get"):
+		var wb = judge.get("world_bounds")
+		if typeof(wb) == TYPE_RECT2:
+			p.x = clamp(p.x, wb.position.x, wb.position.x + wb.size.x)
+			p.y = clamp(p.y, wb.position.y, wb.position.y + wb.size.y)
+
+	# Activate relay
+	_relay_active = true
+	_relay_target = p
+
+	# Move to relay; do not claim the base (complements cover)
+	_set_target(_relay_target)
+	return true
