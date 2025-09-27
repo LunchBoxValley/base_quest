@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3 uid="uid://dhdlprknhnr7g"]
+[gd_scene load_steps=13 format=3 uid="uid://dhdlprknhnr7g"]
 
 [ext_resource type="Script" uid="uid://xdxixx2pmc2g" path="res://entities/runner/runner.gd" id="1_xtlwi"]
 [ext_resource type="Texture2D" uid="uid://x7w2370dnhh" path="res://assets/sprites/Minifantasy_NPCsCarpenterIdle.png" id="2_q663g"]
@@ -67,6 +67,9 @@ animations = [{
 "speed": 5.0
 }]
 
+[sub_resource type="CircleShape2D" id="CircleShape2D_pq3n4"]
+radius = 2.0
+
 [node name="Runner" type="Node2D"]
 script = ExtResource("1_xtlwi")
 
@@ -74,3 +77,17 @@ script = ExtResource("1_xtlwi")
 sprite_frames = SubResource("SpriteFrames_c4g0y")
 animation = &"idle"
 autoplay = "idle"
+
+[node name="BaseTouch" type="Area2D" parent="." groups=["RunnerTouch"]]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="BaseTouch"]
+position = Vector2(0, 1)
+shape = SubResource("CircleShape2D_pq3n4")
+
+[node name="DecisionTick" type="Timer" parent="."]
+wait_time = 0.11
+
+[node name="Label" type="Label" parent="."]
+offset_right = 40.0
+offset_bottom = 23.0
+text = "7"

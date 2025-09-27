@@ -1,10 +1,18 @@
-[gd_scene load_steps=3 format=3 uid="uid://ckg4eqtth6vr1"]
+[gd_scene load_steps=4 format=3 uid="uid://ckg4eqtth6vr1"]
 
 [ext_resource type="Script" uid="uid://d080t2p4pulmq" path="res://entities/base/base.gd" id="1_jwpo4"]
 [ext_resource type="Texture2D" uid="uid://dkmdwhpvk02l2" path="res://assets/sprites/base.png" id="2_qyh2h"]
 
-[node name="Base" type="Node2D"]
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_jwpo4"]
+size = Vector2(5, 6)
+
+[node name="Base" type="Node2D" groups=["runners"]]
 script = ExtResource("1_jwpo4")
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
 texture = ExtResource("2_qyh2h")
+
+[node name="BaseZone" type="Area2D" parent="." groups=["BaseZone"]]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="BaseZone"]
+shape = SubResource("RectangleShape2D_jwpo4")

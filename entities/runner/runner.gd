@@ -1,45 +1,80 @@
+# res://entities/runner/Runner.gd
 extends Node2D
 class_name Runner
 
-@export var speed: float = 80.0
-@export var path: Array[NodePath] = []  # e.g., [Home, First, Second, Home]
+signal reached_base(base_idx: int)
+signal forced_out(base_idx: int)
+signal scored()
 
-var _idx: int = 0
-var _alive: bool = true
-var _id: int = randi()
+@export var speed: float = 80.0
+@export var acceleration: float = 600.0
+@export var snap_dist: float = 6.0
+@export var path: Array[NodePath] = []  # [Home, 1B, 2B, 3B, Home]
+@export var is_forced: bool = true       # usually true for the batter-runner
+
+var _idx := 0
+var _vel := Vector2.ZERO
+var _alive := true
 
 func _ready() -> void:
-	add_to_group("runners")
 	set_physics_process(true)
 
-func id() -> int:
-	return _id
+func begin_at_path_index(i: int) -> void:
+	_idx = clamp(i, 0, path.size() - 1)
+	var n := _target_node()
+	if n:
+		global_position = n.global_position
 
-func start_run() -> void:
-	# Assume we spawn at Home (path[0]); target next base
-	_idx = 1
-	_alive = true
-
-func is_targeting_base(b: Node) -> bool:
-	if _idx >= path.size():
-		return false
-	var tgt := get_node_or_null(path[_idx])
-	return tgt == b
+func commit_to_next() -> void:
+	if _idx < path.size() - 1:
+		_idx += 1
 
 func _physics_process(delta: float) -> void:
-	if not _alive or _idx >= path.size():
+	if not _alive:
 		return
-	var tgt_node := get_node_or_null(path[_idx])
-	if tgt_node == null:
+	var tgt := _target_node()
+	if tgt == null:
 		return
-	var to_vec: Vector2 = (tgt_node.global_position - global_position)
-	var dist: float = to_vec.length()
-	var step: float = speed * delta
-	if dist <= max(1.0, step):
-		global_position = tgt_node.global_position
-		_idx += 1
-		if _idx >= path.size():
-			# reached Home — scored
-			queue_free()
-	else:
-		global_position += to_vec.normalized() * step
+	var goal := tgt.global_position
+	var to_vec := goal - global_position
+	var dist := to_vec.length()
+	var dir := Vector2.ZERO
+	if dist > 0.001:
+		dir = to_vec / dist
+	_vel = _vel.move_toward(dir * speed, acceleration * delta)
+	global_position += _vel * delta
+
+	# Arrival by distance snap (you can also rely purely on BaseZone overlap)
+	if dist <= max(snap_dist, speed * delta):
+		_arrive_at_base(tgt)
+
+func _target_node() -> Node2D:
+	if _idx < 0 or _idx >= path.size():
+		return null
+	return get_node_or_null(path[_idx]) as Node2D
+
+func _arrive_at_base(base_node: Node2D) -> void:
+	# Ask the Base to judge. If out, it returns true.
+	var is_out := false
+	if base_node and base_node.has_method("runner_arrived"):
+		is_out = base_node.runner_arrived(self)
+	var base_idx := _idx
+
+	if is_out:
+		emit_signal("forced_out", base_idx)
+		_alive = false
+		queue_free()
+		return
+
+	emit_signal("reached_base", base_idx)
+
+	# Scored if this is the last node (Home at end of path)
+	if _idx >= path.size() - 1:
+		emit_signal("scored")
+		_alive = false
+		queue_free()
+		return
+
+	# Force advance if play rules say so
+	if is_forced:
+		commit_to_next()
