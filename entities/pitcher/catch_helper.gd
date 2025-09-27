@@ -1,204 +1,248 @@
 extends Node2D
 class_name PitcherCatch
 
+signal pitcher_gloved_ball(ball: Node2D)
+
 @export_group("Scene Paths")
-@export var pitcher_path: NodePath      # optional; leave empty to auto-resolve
-@export var glove_path: NodePath        # optional; leave empty to auto-find "Glove"
+@export var glove_path: NodePath
 
 @export_group("Catching")
-@export var catch_radius_px: float = 18.0
-@export var predict_horizon_sec: float = 0.40
-@export var carry_offset_px: Vector2 = Vector2(0, -4)
-@export var auto_end_play: bool = true          # end play after catch
-@export var require_play_active: bool = false   # safer off while tuning
-@export var recatch_cooldown_sec: float = 0.30  # brief ignore window after catch
+@export var catch_radius_px: float = 30.0
+@export var graze_extra_px: float = 6.0
+@export var min_catch_speed: float = 0.0
+@export var max_catch_speed_to_pitcher: float = 210.0
+@export var require_approaching: bool = true
+@export var approach_dot_threshold: float = 0.20
+@export var catch_cooldown_sec: float = 0.12
+
+@export_group("After Catch FX")
+@export var end_play_on_catch: bool = true
+@export var despawn_delay_sec: float = 0.45
+@export var puff_on_catch: bool = true
+@export var puff_lifetime_sec: float = 0.45
+
+@export_group("Flow")
+@export var require_play_active: bool = false
 
 @export_group("Debug")
-@export var debug_draw: bool = false
 @export var debug_prints: bool = false
+@export var debug_draw: bool = false
 
-var _pitcher: Node2D = null
 var _glove: Node2D = null
-var _ball: Ball = null
-var _poll_timer: Timer = null
-var _cooldown_timer: Timer = null
-var _cooldown_active := false
-
-# Debug draw cache
-var _last_seg_a: Vector2 = Vector2.ZERO
-var _last_seg_b: Vector2 = Vector2.ZERO
+var _cooldown_until: float = 0.0
+var _held_ball: Node2D = null  # latched so we don't re-catch
 
 func _ready() -> void:
-	_resolve_pitcher_and_glove()
-
-	_poll_timer = Timer.new()
-	_poll_timer.wait_time = 0.05
-	_poll_timer.one_shot = false
-	add_child(_poll_timer)
-	if not _poll_timer.timeout.is_connected(_tick):
-		_poll_timer.timeout.connect(_tick)
-	_poll_timer.start()
-
-	_cooldown_timer = Timer.new()
-	_cooldown_timer.one_shot = true
-	add_child(_cooldown_timer)
-	if not _cooldown_timer.timeout.is_connected(_on_cooldown_done):
-		_cooldown_timer.timeout.connect(_on_cooldown_done)
-
-	# We never glue the ball per-frame
-	set_physics_process(false)
-
-func _on_cooldown_done() -> void:
-	_cooldown_active = false
-
-func _resolve_pitcher_and_glove() -> void:
-	# Pitcher
-	if pitcher_path != NodePath():
-		_pitcher = get_node_or_null(pitcher_path) as Node2D
-	if _pitcher == null:
-		var parent_nd := get_parent() as Node2D
-		var self_nd := self as Node2D
-		var parent_has_glove := parent_nd != null and parent_nd.get_node_or_null("Glove") != null
-		var self_has_glove := self_nd != null and self_nd.get_node_or_null("Glove") != null
-		if self_has_glove and not parent_has_glove:
-			_pitcher = self_nd
-		elif parent_has_glove:
-			_pitcher = parent_nd
-		else:
-			_pitcher = (self_nd if self_nd != null else parent_nd)
-
-	# Glove
-	if glove_path != NodePath() and _pitcher:
-		_glove = _pitcher.get_node_or_null(glove_path) as Node2D
-	if _glove == null and _pitcher != null:
-		_glove = _pitcher.get_node_or_null("Glove") as Node2D
+	if glove_path != NodePath():
+		_glove = get_node_or_null(glove_path) as Node2D
 	if _glove == null:
-		_glove = _pitcher
+		_glove = get_node_or_null("Glove") as Node2D
+	if _glove == null:
+		_glove = self
+	set_physics_process(true)
 
-func _tick() -> void:
-	if _cooldown_active:
+func _physics_process(_delta: float) -> void:
+	# If we're holding a ball, pin it to the glove and don't scan.
+	if is_instance_valid(_held_ball):
+		_held_ball.global_position = _glove.global_position
 		return
+
 	if require_play_active and not GameManager.play_active:
 		return
 
-	if _pitcher == null or _glove == null:
-		_resolve_pitcher_and_glove()
-		if _pitcher == null or _glove == null:
+	var now := Time.get_ticks_msec() * 0.001
+	if now < _cooldown_until:
+		return
+
+	var ball := _find_throw_candidate()
+	if ball == null:
+		if debug_prints: print("[PitcherCatch] no candidate")
+		return
+
+	var gpos := _glove.global_position
+	var bpos := ball.global_position
+	var to_glove := gpos - bpos
+	var dist := to_glove.length()
+	var max_dist := catch_radius_px + graze_extra_px
+	if dist > max_dist:
+		if debug_prints: print("[PitcherCatch] too far (", dist, " > ", max_dist, ")")
+		return
+
+	var vel := _get_ball_velocity(ball)
+	var speed := vel.length()
+
+	# Reject anything too hot for a gentle toss-back.
+	if speed > max_catch_speed_to_pitcher:
+		if debug_prints: print("[PitcherCatch] too fast for glove: ", speed)
+		return
+
+	if require_approaching and speed > 0.001 and dist > 4.0:
+		var dir_ball := vel / speed
+		var dir_to_glove = to_glove / max(0.001, dist)
+		var dot := dir_ball.dot(dir_to_glove)
+		if dot < approach_dot_threshold:
+			if debug_prints: print("[PitcherCatch] not approaching (dot=", dot, ")")
 			return
 
-	_refresh_ball()
-	if not is_instance_valid(_ball):
-		return
+	_glove_ball(ball, gpos)
+	_cooldown_until = now + catch_cooldown_sec
 
-	# STRICT: only process **throws**
-	if not _is_throw(_ball):
-		return
+func _glove_ball(ball: Node2D, glove_pos: Vector2) -> void:
+	if debug_prints:
+		print("[PitcherCatch] GLOVE at ", glove_pos)
 
-	var ppos := _pitcher.global_position
-	var bpos := _ball.global_position
-	var v := _ball_velocity(_ball)
-	var speed2 := v.length_squared()
-	if speed2 < 0.0001:
-		return
-
-	# Must be APPROACHING: velocity must have component toward pitcher
-	# i.e., dot((pitcher - ball), v) > 0
-	if (ppos - bpos).dot(v) <= 0.0:
-		return
-
-	var pr := catch_radius_px
-	var close_enough := ppos.distance_to(bpos) <= pr
-
-	# Intercept check (closest approach within horizon)
-	var intercept_ok := false
-	if not close_enough:
-		var r := bpos - ppos
-		var tstar = - (r.dot(v)) / max(0.0001, speed2)
-		tstar = clamp(tstar, 0.0, predict_horizon_sec)
-		var cpos = bpos + v * tstar
-		intercept_ok = ppos.distance_to(cpos) <= pr
-		if debug_draw:
-			_last_seg_a = to_local(bpos)
-			_last_seg_b = to_local(cpos)
-			queue_redraw()
-
-	if close_enough or intercept_ok:
-		_catch_and_release(_ball)
-
-func _refresh_ball() -> void:
-	if is_instance_valid(_ball):
-		return
-	for n in get_tree().get_nodes_in_group("balls"):
-		if n is Ball:
-			_ball = n
-			break
-
-func _catch_and_release(ball: Ball) -> void:
-	if not is_instance_valid(ball) or _glove == null:
-		return
-
-	# 1) Snap once to glove
-	ball.global_position = _glove.global_position + carry_offset_px
-
-	# 2) Re-enable processing & zero velocity so it rests; we do NOT keep updating it
-	ball.process_mode = Node.PROCESS_MODE_INHERIT
+	# Stop & snap; no global process freeze—use latch instead.
 	_set_ball_velocity(ball, Vector2.ZERO)
+	if ball.has_method("clear_spin"):
+		ball.call("clear_spin")
+	ball.global_position = glove_pos
 
-	# 3) Clear throw intent & any fielder claim
-	if ball.has_meta("delivery"):
-		ball.remove_meta("delivery")
-	if ball.has_meta("claimer"):
-		ball.remove_meta("claimer")
+	# Mark as caught with override that trumps last_delivery().
+	ball.set_meta("delivery", "caught")
+	ball.set_meta("delivery_override", "caught")
+	ball.set_meta("caught_by", "pitcher")
 
-	# 4) End the play (Assisted loop reset)
-	if auto_end_play:
+	# Ensure it won't be considered again.
+	if ball.is_in_group("balls"):
+		ball.remove_from_group("balls")
+
+	# Latch as held so we keep it pinned and never re-catch.
+	_held_ball = ball
+
+	# Soft smoke puff to mask despawn (optional)
+	if puff_on_catch:
+		_spawn_puff(glove_pos, puff_lifetime_sec)
+
+	emit_signal("pitcher_gloved_ball", ball)
+
+	# Schedule a fast despawn (hide within <1s)
+	_despawn_after_delay()
+
+	if end_play_on_catch:
 		if debug_prints: print("[PitcherCatch] end_play()")
 		GameManager.end_play()
 
-	# 5) Cooldown so we don't re-catch immediately
-	_cooldown_active = true
-	_cooldown_timer.start(max(0.05, recatch_cooldown_sec))
-	_ball = null
+func _despawn_after_delay() -> void:
+	var t := get_tree().create_timer(max(0.05, despawn_delay_sec), true, true)
+	await t.timeout
+	if is_instance_valid(_held_ball):
+		_held_ball.visible = false
+		# If you pool balls, replace with pool return.
+		_held_ball.queue_free()
+	_held_ball = null
 
-	if debug_prints: print("[PitcherCatch] Caught throw to pitcher")
+# ----------------- Candidate selection (strict throws only) -----------------
+func _find_throw_candidate() -> Node2D:
+	var best: Node2D = null
+	var best_score := -1e9
+	var gpos := (_glove.global_position if _glove else global_position)
 
-func _is_throw(b: Node2D) -> bool:
-	if b == null or not is_instance_valid(b):
-		return false
+	for n in get_tree().get_nodes_in_group("balls"):
+		var b := n as Node2D
+		if b == null:
+			continue
+		if b == _held_ball:
+			continue  # never reconsider what we hold
+
+		var delivery := _delivery_of(b).to_lower()
+		# Only consider true throws (prevents catching own pitch/hits).
+		if delivery != "throw":
+			if debug_prints: print("[PitcherCatch] skip: delivery=", delivery)
+			continue
+		# Optional: ignore throws made by pitcher himself.
+		if b.has_meta("thrown_by") and String(b.get_meta("thrown_by")).to_lower() == "pitcher":
+			if debug_prints: print("[PitcherCatch] skip: thrown_by=pitcher")
+			continue
+
+		var dist := gpos.distance_to(b.global_position)
+		var vel := _get_ball_velocity(b)
+		var speed := vel.length()
+		var toward := 0.0
+		if speed > 0.001 and dist > 0.001:
+			var dir_ball := vel / speed
+			var dir_to_glove := (gpos - b.global_position) / dist
+			toward = dir_ball.dot(dir_to_glove)
+
+		var score := -dist + toward * 15.0
+		if score > best_score:
+			best_score = score
+			best = b
+
+	return best
+
+# ----------------- Helpers -----------------
+func _delivery_of(b: Node2D) -> String:
+	# Prefer explicit meta override if present.
+	if b.has_meta("delivery_override"):
+		return String(b.get_meta("delivery_override"))
+	if b.has_meta("delivery"):
+		return String(b.get_meta("delivery"))
 	if b.has_method("last_delivery"):
-		return String(b.last_delivery()).to_lower() == "throw"
-	return b.has_meta("delivery") and String(b.get_meta("delivery")).to_lower() == "throw"
+		return String(b.call("last_delivery"))
+	return "unknown"
 
-# ---------- utilities ----------
+func _get_ball_velocity(b: Node2D) -> Vector2:
+	if b.has_method("get_velocity"):
+		var v = b.call("get_velocity")
+		if typeof(v) == TYPE_VECTOR2:
+			return v
+	var v1 = b.get("velocity")
+	if typeof(v1) == TYPE_VECTOR2:
+		return v1
+	var v2 = b.get("linear_velocity")
+	if typeof(v2) == TYPE_VECTOR2:
+		return v2
+	return Vector2.ZERO
+
 func _set_ball_velocity(b: Node2D, v: Vector2) -> void:
 	if b.has_method("set_velocity"):
 		b.call("set_velocity", v)
 	elif b.has_method("set_linear_velocity"):
 		b.call("set_linear_velocity", v)
-	else:
-		if b.has_method("get"):
-			var curv = b.get("velocity")
-			if typeof(curv) == TYPE_VECTOR2:
-				b.set("velocity", v)
-			else:
-				curv = b.get("linear_velocity")
-				if typeof(curv) == TYPE_VECTOR2:
-					b.set("linear_velocity", v)
+	elif b.has_method("set"):
+		if typeof(b.get("velocity")) == TYPE_VECTOR2:
+			b.set("velocity", v)
+		elif typeof(b.get("linear_velocity")) == TYPE_VECTOR2:
+			b.set("linear_velocity", v)
 
-func _ball_velocity(b: Node2D) -> Vector2:
-	if b and is_instance_valid(b):
-		if b.has_method("get_velocity"):
-			var v = b.call("get_velocity")
-			if typeof(v) == TYPE_VECTOR2:
-				return v
-		var vv = b.get("velocity")
-		if typeof(vv) == TYPE_VECTOR2: return vv
-		var lv = b.get("linear_velocity")
-		if typeof(lv) == TYPE_VECTOR2: return lv
-	return Vector2.ZERO
+# --- tiny smoke puff (soft, gray, upward drift) ---
+func _spawn_puff(at: Vector2, life: float) -> void:
+	var p := CPUParticles2D.new()
+	p.one_shot = true
+	p.local_coords = true
+	p.lifetime = max(0.2, life)
+	p.amount = 8
+	p.emission_shape = CPUParticles2D.EMISSION_SHAPE_POINT
+	p.position = to_local(at)
 
-# ---------- debug drawing ----------
+	# Soft motion (no damping property used)
+	p.initial_velocity_min = 10.0
+	p.initial_velocity_max = 16.0
+	p.direction = Vector2(0, -1)   # slight upward bias
+	p.spread = 20.0                # tight fan, not explosive
+	p.gravity = Vector2(0, -18)    # gentle rise
+
+	# Fade via color ramp
+	var grad := Gradient.new()
+	grad.add_point(0.0, Color(0.92, 0.92, 0.92, 0.50))
+	grad.add_point(0.6, Color(0.88, 0.88, 0.88, 0.25))
+	grad.add_point(1.0, Color(0.85, 0.85, 0.85, 0.0))
+	p.color_ramp = grad
+
+	add_child(p)
+	p.emitting = true
+
+	# Auto-remove puff after it finishes
+	var t := get_tree().create_timer(p.lifetime + 0.1, true, true)
+	await t.timeout
+	if is_instance_valid(p):
+		p.queue_free()
+
+# ----------------- Debug draw -----------------
 func _draw() -> void:
 	if not debug_draw:
 		return
-	draw_line(_last_seg_a, _last_seg_b, Color(0.2, 1.0, 0.6, 0.8), 1.0)
+	var g := (_glove if _glove != null else self)
+	draw_circle(to_local(g.global_position), catch_radius_px, Color(0.2, 0.9, 0.3, 0.15))
+	draw_circle(to_local(g.global_position), catch_radius_px + graze_extra_px, Color(0.2, 0.9, 0.3, 0.08))
+	draw_circle(to_local(g.global_position), 2.0, Color(0.2, 0.9, 0.3, 0.8))
