@@ -36,6 +36,7 @@ folder_colors={
 "res://assets/": "orange",
 "res://autoload/": "gray",
 "res://entities/": "blue",
+"res://fx/": "pink",
 "res://scenes/": "green",
 "res://systems/": "red"
 }

@@ -51,7 +51,6 @@ var _spawn_pos: Vector2 = Vector2.ZERO
 # --- Node refs ---
 @onready var _glove: Node2D = $Glove
 @onready var _timer: Timer = $DecisionTimer
-@onready var _base_sensor: Area2D = $BaseSensor  # <-- NEW: Area2D at fielder’s feet
 
 # --- External refs ---
 var _field: Node = null
@@ -76,11 +75,7 @@ var _relay_target: Vector2 = Vector2.ZERO
 # --- Throw decision cache ---
 var _throw_target: Node2D = null
 
-# --- Base overlap tracking (for force calls) ---
-var _overlapping_bases: Array[Area2D] = []   # stores BaseZone Areas
-
 func _ready() -> void:
-	# Resolve refs
 	if home_marker_path != NodePath():
 		_home_marker = get_node_or_null(home_marker_path) as Node2D
 	if _home_marker != null:
@@ -92,38 +87,27 @@ func _ready() -> void:
 		_field = get_node_or_null(field_path)
 	_resolve_pitcher_if_needed()
 
-	# Decision loop
 	_timer.wait_time = max(0.06, decision_interval_sec)
 	_timer.one_shot = false
 	if not _timer.timeout.is_connected(_on_decide):
 		_timer.timeout.connect(_on_decide)
 	_timer.start()
 
-	# BaseSensor hookups (NEW)
-	if is_instance_valid(_base_sensor):
-		if not _base_sensor.area_entered.is_connected(_on_base_sensor_entered):
-			_base_sensor.area_entered.connect(_on_base_sensor_entered)
-		if not _base_sensor.area_exited.is_connected(_on_base_sensor_exited):
-			_base_sensor.area_exited.connect(_on_base_sensor_exited)
-
 	add_to_group("fielders")
 	_enter_state(S_IDLE)
 
 func _physics_process(delta: float) -> void:
-	# Carry logic: keep ball at glove while we own it
 	if _has_ball and is_instance_valid(_ball):
 		_ball.global_position = _glove.global_position + carry_offset_px
-		# If standing on a base while holding the ball, stamp control time (NEW)
-		if _overlapping_bases.size() > 0:
-			_register_ball_on_any_overlapped_base()
 
-	# Simple steering toward move target, with arrival braking during S_SEEK_BALL
 	var to_target := (_move_target - global_position)
 	var dist := to_target.length()
 	var desired_speed := move_speed
 
 	if _state == S_SEEK_BALL:
-		var pred := _predict_ball_point(_ball) if is_instance_valid(_ball) else _move_target
+		var pred := _move_target
+		if is_instance_valid(_ball):
+			pred = _predict_ball_point(_ball)
 		var d_to_pred := global_position.distance_to(pred)
 		if d_to_pred < approach_slow_radius_px:
 			var t = clamp(d_to_pred / max(0.001, approach_slow_radius_px), 0.0, 1.0)
@@ -175,7 +159,6 @@ func _on_decide() -> void:
 
 			_set_target(_predict_ball_point(_ball))
 
-			# Pickup check (with gentle scoop)
 			if is_instance_valid(_ball):
 				var pr := pickup_radius_px
 				if _ball_speed(_ball) <= soft_pickup_speed_thresh:
@@ -191,7 +174,9 @@ func _on_decide() -> void:
 			if not _has_ball:
 				_enter_state(S_RETURN)
 				return
-			var target := _throw_target if _throw_target != null else _choose_throw_target()
+			var target := _throw_target
+			if target == null:
+				target = _choose_throw_target()
 			_do_throw_to(target)
 			_enter_state(S_RETURN)
 
@@ -227,9 +212,7 @@ func _enter_state(s: int) -> void:
 
 func _set_target(p: Vector2) -> void:
 	_move_target = p
-	# (optional: NavigationAgent2D hookup later)
 
-# --- FieldJudge lookup (optional) ---
 func _resolve_field() -> Node:
 	if _field and is_instance_valid(_field):
 		return _field
@@ -238,7 +221,6 @@ func _resolve_field() -> Node:
 		_field = g
 	return _field
 
-# --- Pitcher resolution ---
 func _resolve_pitcher_if_needed() -> void:
 	if _pitcher == null and pitcher_path != NodePath():
 		_pitcher = get_node_or_null(pitcher_path) as Node2D
@@ -319,7 +301,7 @@ func _predict_ball_point(b: Node2D) -> Vector2:
 			pred.y = clamp(pred.y, wb.position.y, wb.position.y + wb.size.y)
 	return pred
 
-# --- single-claimer system ---
+# --- single-claimer system to prevent dog-piles ---
 func _can_chase_ball(b: Node) -> bool:
 	if b == null or not is_instance_valid(b):
 		return false
@@ -382,24 +364,68 @@ func _pickup_ball(ball: Ball) -> void:
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
 	_ball.global_position = _glove.global_position
 	_throw_target = _choose_throw_target()
-	# If we’re already on a base when we pick up, stamp control time immediately (NEW)
-	_register_ball_on_any_overlapped_base()
 
+# --- Runner-aware throw target selection (robust & deterministic) ---
 func _choose_throw_target() -> Node2D:
+	var root := get_tree().get_current_scene()
+	var runners := get_tree().get_nodes_in_group("runners")
+
+	if root and runners.size() > 0:
+		var best_base: Node2D = null
+		var best_d := 1e9
+
+		for r in runners:
+			var np: NodePath = NodePath()
+			if r is Runner:
+				var rr := r as Runner
+				var next_idx := rr.get_next_path_index()
+				if next_idx >= 0 and next_idx < rr.path.size():
+					np = rr.path[next_idx]
+			elif r.has_method("next_base_path"):
+				var v = r.call("next_base_path")
+				if typeof(v) == TYPE_NODE_PATH:
+					np = v
+
+			if np != NodePath():
+				var b := root.get_node_or_null(np) as Node2D
+				if b:
+					var ref_pos := global_position
+					if is_instance_valid(_ball):
+						ref_pos = _ball.global_position
+					var d := ref_pos.distance_to(b.global_position)
+					if d < best_d:
+						best_d = d
+						best_base = b
+
+		if best_base:
+			if debug_prints:
+				print("[Fielder] target via runner next base -> ", best_base.name)
+			return best_base
+
 	var base1 := _get_base1()
-	if prefer_first_on_hit and _is_live_hit() and base1:
+	if base1 != null and (_is_live_hit() or prefer_first_on_hit):
+		if debug_prints:
+			print("[Fielder] fallback target -> Base1")
 		return base1
+
 	_resolve_pitcher_if_needed()
 	if fallback_to_pitcher and _pitcher and is_instance_valid(_pitcher):
+		if debug_prints:
+			print("[Fielder] fallback target -> Pitcher")
 		return _pitcher
+
 	return base1
 
 func _get_base1() -> Node2D:
 	var root := get_tree().get_current_scene()
 	if root == null:
 		return null
-	return root.get_node_or_null(NodePath("Base1")) as Node2D
+	var b1 := root.get_node_or_null(NodePath("Entities/Base1")) as Node2D
+	if b1 == null:
+		b1 = root.get_node_or_null(NodePath("Base1")) as Node2D
+	return b1
 
+# ------------ THROW ------------
 func _do_throw_to(target: Node2D) -> void:
 	if not is_instance_valid(_ball) or not _has_ball:
 		return
@@ -410,7 +436,10 @@ func _do_throw_to(target: Node2D) -> void:
 	if target != null and is_instance_valid(target):
 		final_target = target
 	else:
-		final_target = (_pitcher if (_pitcher != null and is_instance_valid(_pitcher)) else _get_base1())
+		if _pitcher != null and is_instance_valid(_pitcher):
+			final_target = _pitcher
+		else:
+			final_target = _get_base1()
 
 	if final_target == null or not is_instance_valid(final_target):
 		if debug_prints: print("[Fielder] ABORT throw: no valid target")
@@ -493,22 +522,6 @@ func _on_ball_out_of_play() -> void:
 	if _state != S_RETURN:
 		_enter_state(S_RETURN)
 
-# ---------------- Base sensing (NEW) ----------------
-func _on_base_sensor_entered(a: Area2D) -> void:
-	if a.is_in_group("BaseZone"):
-		_overlapping_bases.append(a)
-		if _has_ball:
-			_register_ball_on_any_overlapped_base()
-
-func _on_base_sensor_exited(a: Area2D) -> void:
-	_overlapping_bases.erase(a)
-
-func _register_ball_on_any_overlapped_base() -> void:
-	for a in _overlapping_bases:
-		var base := a.get_parent()
-		if base and base.has_method("ball_controlled_on_bag"):
-			base.ball_controlled_on_bag()  # stamps time on the base
-
 # ---------------- Cover-Base ----------------
 func _cover_release_all() -> void:
 	if _cover_target and is_instance_valid(_cover_target):
@@ -523,6 +536,9 @@ func _get_bases() -> Array:
 		var b1 := root.get_node_or_null(NodePath("Base1")) as Node2D
 		var b2 := root.get_node_or_null(NodePath("Base2")) as Node2D
 		var b3 := root.get_node_or_null(NodePath("Base3")) as Node2D
+		if b1 == null: b1 = root.get_node_or_null(NodePath("Entities/Base1")) as Node2D
+		if b2 == null: b2 = root.get_node_or_null(NodePath("Entities/Base2")) as Node2D
+		if b3 == null: b3 = root.get_node_or_null(NodePath("Entities/Base3")) as Node2D
 		if b1: bases.append(b1)
 		if b2: bases.append(b2)
 		if b3: bases.append(b3)
@@ -543,7 +559,6 @@ func _cover_tick(live: bool, is_hit: bool) -> void:
 		if not _relay_active:
 			_set_target(_get_home_pos())
 		return
-
 	if _ball and _i_am_closest_to_ball(_ball):
 		_cover_release_all()
 		return
@@ -618,6 +633,9 @@ func _relay_tick(live: bool, is_hit: bool) -> bool:
 	var root := get_tree().get_current_scene()
 	var base1 := root.get_node_or_null(NodePath("Base1")) as Node2D
 	var base2 := root.get_node_or_null(NodePath("Base2")) as Node2D
+	if base1 == null: base1 = root.get_node_or_null(NodePath("Entities/Base1")) as Node2D
+	if base2 == null: base2 = root.get_node_or_null(NodePath("Entities/Base2")) as Node2D
+
 	if _ball.global_position.x >= plate_x and base1:
 		target_base = base1
 	elif base2:
