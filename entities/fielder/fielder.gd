@@ -1,4 +1,4 @@
-extends CharacterBody2D 
+extends CharacterBody2D
 class_name Fielder
 
 @export_group("Team / Placement")
@@ -10,6 +10,10 @@ var _spawn_pos: Vector2 = Vector2.ZERO
 @export_group("Scene Paths")
 @export var field_path: NodePath
 @export var pitcher_path: NodePath
+
+@export_group("Role")
+@export var assigned_base_path: NodePath        # Set on 1B / 2B / 3B fielders
+@export var is_outfielder: bool = false         # True for LF / RF
 
 @export_group("Movement")
 @export var move_speed: float = 85.0
@@ -45,6 +49,23 @@ var _spawn_pos: Vector2 = Vector2.ZERO
 @export var prefer_first_on_hit: bool = true
 @export var fallback_to_pitcher: bool = true
 
+@export_group("Catching (incoming throws)")
+@export var catch_radius_px: float = 26.0
+@export var graze_extra_px: float = 6.0
+@export var max_catch_speed_to_fielder: float = 230.0
+@export var require_approaching: bool = true
+@export var approach_dot_threshold: float = 0.20
+@export var catch_cooldown_sec: float = 0.12
+
+@export_group("Catch FX")
+@export var catch_puff_enabled: bool = true
+@export var catch_puff_lifetime_sec: float = 0.45
+
+@export_group("Cover Throwing")
+@export var require_cover_on_base_to_throw: bool = true
+@export var on_base_catch_radius_px: float = 8.0
+@export var hold_near_base_offset_px: float = 18.0
+
 @export_group("Debug")
 @export var debug_prints: bool = false
 
@@ -75,6 +96,13 @@ var _relay_target: Vector2 = Vector2.ZERO
 # --- Throw decision cache ---
 var _throw_target: Node2D = null
 
+# --- Catching cooldown ---
+var _catch_cooldown_until: float = 0.0
+
+# --- Intended throw context (base + coverer) ---
+var _intend_base: Node2D = null
+var _intend_coverer: Fielder = null
+
 func _ready() -> void:
 	if home_marker_path != NodePath():
 		_home_marker = get_node_or_null(home_marker_path) as Node2D
@@ -96,10 +124,21 @@ func _ready() -> void:
 	add_to_group("fielders")
 	_enter_state(S_IDLE)
 
+	# If this fielder is permanently assigned to a base, register helpful meta.
+	var base := _get_assigned_base()
+	if base != null:
+		base.set_meta("assigned_fielder_id", get_instance_id())
+
 func _physics_process(delta: float) -> void:
+	# Keep carried ball pinned to glove
 	if _has_ball and is_instance_valid(_ball):
 		_ball.global_position = _glove.global_position + carry_offset_px
 
+	# Try to glove an incoming throw if we don't already hold a ball
+	if not _has_ball:
+		_try_glove_incoming_throw()
+
+	# Movement
 	var to_target := (_move_target - global_position)
 	var dist := to_target.length()
 	var desired_speed := move_speed
@@ -144,7 +183,7 @@ func _on_decide() -> void:
 					_cover_tick(live, is_hit)
 
 		S_SEEK_BALL:
-			if not live:
+			if not live or _ball_is_foul(_ball):
 				_release_ball_claim(_ball)
 				_enter_state(S_RETURN)
 				return
@@ -156,9 +195,7 @@ func _on_decide() -> void:
 				_release_ball_claim(_ball)
 				_enter_state(S_RETURN)
 				return
-
 			_set_target(_predict_ball_point(_ball))
-
 			if is_instance_valid(_ball):
 				var pr := pickup_radius_px
 				if _ball_speed(_ball) <= soft_pickup_speed_thresh:
@@ -174,10 +211,28 @@ func _on_decide() -> void:
 			if not _has_ball:
 				_enter_state(S_RETURN)
 				return
-			var target := _throw_target
-			if target == null:
-				target = _choose_throw_target()
-			_do_throw_to(target)
+
+			# Outfielders throw to the fielder covering the runner’s current/next base.
+			# Infielders also use coverer logic (e.g., 3B throwing to 2B cover).
+			_compute_intended_base_and_coverer()
+
+			if require_cover_on_base_to_throw and _intend_base != null and _intend_coverer != null:
+				if not _is_fielder_on_base(_intend_coverer, _intend_base, on_base_catch_radius_px):
+					var hold := _hold_point_near_base(_intend_base, hold_near_base_offset_px)
+					_set_target(hold)
+					return
+
+			var target_node: Node2D = null
+			if _intend_coverer != null:
+				target_node = _intend_coverer
+			else:
+				target_node = _choose_throw_target()
+
+			if target_node == null:
+				_set_target(_get_home_pos())
+				return
+
+			_do_throw_to(target_node)
 			_enter_state(S_RETURN)
 
 		S_RETURN:
@@ -192,9 +247,18 @@ func _on_decide() -> void:
 
 # -------------------- Helpers --------------------
 func _get_home_pos() -> Vector2:
+	# If assigned to a base, “home” is the base—keeps them on the bag when idle.
+	var base := _get_assigned_base()
+	if base != null:
+		return base.global_position
 	if _home_marker != null:
 		return _home_marker.global_position
 	return _spawn_pos
+
+func _get_assigned_base() -> Node2D:
+	if assigned_base_path != NodePath():
+		return get_node_or_null(assigned_base_path) as Node2D
+	return null
 
 func _enter_state(s: int) -> void:
 	_state = s
@@ -206,7 +270,7 @@ func _enter_state(s: int) -> void:
 		S_CARRY:
 			pass
 		S_THROW:
-			pass
+			_compute_intended_base_and_coverer()
 		S_RETURN:
 			_set_target(_get_home_pos())
 
@@ -363,57 +427,132 @@ func _pickup_ball(ball: Ball) -> void:
 	_release_ball_claim(ball)
 	_ball.process_mode = Node.PROCESS_MODE_DISABLED
 	_ball.global_position = _glove.global_position
-	_throw_target = _choose_throw_target()
+	_emit_catch_puff(_glove.global_position)
+	_compute_intended_base_and_coverer()
 
-# --- Runner-aware throw target selection (robust & deterministic) ---
-func _choose_throw_target() -> Node2D:
+# --- Assigned-base + cover system ---
+func _compute_intended_base_and_coverer() -> void:
+	_intend_base = _determine_runner_base()
+	_intend_coverer = null
+	if _intend_base != null:
+		_intend_coverer = _resolve_coverer_for_base(_intend_base)
+
+func _determine_runner_base() -> Node2D:
 	var root := get_tree().get_current_scene()
+	if root == null:
+		return _get_base1()
 	var runners := get_tree().get_nodes_in_group("runners")
-
-	if root and runners.size() > 0:
-		var best_base: Node2D = null
-		var best_d := 1e9
-
+	var best_base: Node2D = null
+	var best_d := 1e9
+	if runners.size() > 0:
 		for r in runners:
-			var np: NodePath = NodePath()
 			if r is Runner:
 				var rr := r as Runner
-				var next_idx := rr.get_next_path_index()
+				var cur_idx := -1
+				if rr.has_method("get_current_path_index"):
+					cur_idx = int(rr.get_current_path_index())
+				var next_idx := -1
+				if rr.has_method("get_next_path_index"):
+					next_idx = int(rr.get_next_path_index())
+				if cur_idx >= 0 and cur_idx < rr.path.size():
+					var bcur := root.get_node_or_null(rr.path[cur_idx]) as Node2D
+					if bcur:
+						var ref := global_position
+						if is_instance_valid(_ball):
+							ref = _ball.global_position
+						var d1 := ref.distance_to(bcur.global_position)
+						if d1 < best_d:
+							best_d = d1
+							best_base = bcur
 				if next_idx >= 0 and next_idx < rr.path.size():
-					np = rr.path[next_idx]
+					var bnext := root.get_node_or_null(rr.path[next_idx]) as Node2D
+					if bnext:
+						var ref2 := global_position
+						if is_instance_valid(_ball):
+							ref2 = _ball.global_position
+						var d2 := ref2.distance_to(bnext.global_position)
+						if d2 < best_d:
+							best_d = d2
+							best_base = bnext
 			elif r.has_method("next_base_path"):
-				var v = r.call("next_base_path")
-				if typeof(v) == TYPE_NODE_PATH:
-					np = v
+				var np = r.call("next_base_path")
+				if typeof(np) == TYPE_NODE_PATH:
+					var bb := root.get_node_or_null(np) as Node2D
+					if bb:
+						var ref3 := global_position
+						if is_instance_valid(_ball):
+							ref3 = _ball.global_position
+						var d3 := ref3.distance_to(bb.global_position)
+						if d3 < best_d:
+							best_d = d3
+							best_base = bb
+	if best_base != null:
+		return best_base
 
-			if np != NodePath():
-				var b := root.get_node_or_null(np) as Node2D
-				if b:
-					var ref_pos := global_position
-					if is_instance_valid(_ball):
-						ref_pos = _ball.global_position
-					var d := ref_pos.distance_to(b.global_position)
-					if d < best_d:
-						best_d = d
-						best_base = b
-
-		if best_base:
-			if debug_prints:
-				print("[Fielder] target via runner next base -> ", best_base.name)
-			return best_base
-
-	var base1 := _get_base1()
-	if base1 != null and (_is_live_hit() or prefer_first_on_hit):
-		if debug_prints:
-			print("[Fielder] fallback target -> Base1")
-		return base1
+	var b1 := _get_base1()
+	if b1 != null and (_is_live_hit() or prefer_first_on_hit):
+		return b1
 
 	_resolve_pitcher_if_needed()
 	if fallback_to_pitcher and _pitcher and is_instance_valid(_pitcher):
-		if debug_prints:
-			print("[Fielder] fallback target -> Pitcher")
 		return _pitcher
 
+	return b1
+
+func _resolve_coverer_for_base(base: Node2D) -> Fielder:
+	if base == null:
+		return null
+	if base.has_meta("coverer"):
+		var id_val = base.get_meta("coverer")
+		for n in get_tree().get_nodes_in_group("fielders"):
+			if n is Fielder:
+				var f := n as Fielder
+				if int(id_val) == f.get_instance_id():
+					return f
+	# Prefer permanently assigned fielder if registered
+	if base.has_meta("assigned_fielder_id"):
+		var aid := int(base.get_meta("assigned_fielder_id"))
+		for n in get_tree().get_nodes_in_group("fielders"):
+			if n is Fielder and int((n as Fielder).get_instance_id()) == aid:
+				return n as Fielder
+	# Otherwise nearest infielder
+	var best: Fielder = null
+	var best_d := 1e9
+	for n in get_tree().get_nodes_in_group("fielders"):
+		if not (n is Fielder):
+			continue
+		var f := n as Fielder
+		if not f._is_infielder_strict():
+			continue
+		var d := f.global_position.distance_to(base.global_position)
+		if d < best_d:
+			best_d = d
+			best = f
+	return best
+
+func _is_fielder_on_base(f: Fielder, base: Node2D, radius_px: float) -> bool:
+	if f == null or base == null:
+		return false
+	return f.global_position.distance_to(base.global_position) <= max(0.0, radius_px)
+
+func _hold_point_near_base(base: Node2D, offset_px: float) -> Vector2:
+	if base == null:
+		return global_position
+	var from := global_position - base.global_position
+	if from.length() < 0.001:
+		from = Vector2(0, -1)
+	return base.global_position + from.normalized() * max(0.0, offset_px)
+
+# --- Legacy fallback if no coverer found ---
+func _choose_throw_target() -> Node2D:
+	if _intend_coverer != null:
+		return _intend_coverer
+	var base1 := _get_base1()
+	if base1 != null and (_is_live_hit() or prefer_first_on_hit):
+		return base1
+	_resolve_pitcher_if_needed()
+	if fallback_to_pitcher and _pitcher and is_instance_valid(_pitcher):
+		return _pitcher
 	return base1
 
 func _get_base1() -> Node2D:
@@ -445,13 +584,8 @@ func _do_throw_to(target: Node2D) -> void:
 		if debug_prints: print("[Fielder] ABORT throw: no valid target")
 		return
 
-	var is_pitcher := (final_target == _pitcher) \
-		|| final_target.is_in_group("pitcher") \
-		|| final_target.is_in_group("pitchers") \
-		|| String(final_target.name).to_lower() == "pitcher"
-
 	var aim_pos := final_target.global_position
-	var glove := final_target.get_node_or_null("Glove") as Node2D
+	var glove := _get_glove_of(final_target)
 	if glove != null:
 		aim_pos = glove.global_position
 
@@ -460,6 +594,11 @@ func _do_throw_to(target: Node2D) -> void:
 	var dir := Vector2.DOWN
 	if dist > 0.0001:
 		dir = vec / dist
+
+	var is_pitcher := (final_target == _pitcher) \
+		|| final_target.is_in_group("pitcher") \
+		|| final_target.is_in_group("pitchers") \
+		|| String(final_target.name).to_lower() == "pitcher"
 
 	var spd: float
 	if is_pitcher:
@@ -471,8 +610,8 @@ func _do_throw_to(target: Node2D) -> void:
 		spd = lerp(throw_speed_min, throw_speed_max, t)
 
 	if debug_prints:
-		print("[Fielder] Throw -> ", ( "Pitcher" if is_pitcher else String(final_target.name)),
-			" aim=", aim_pos, " dist=", dist, " spd=", spd, " dir=", dir)
+		var label := String(final_target.name)
+		print("[Fielder] Throw -> ", label, " aim=", aim_pos, " dist=", dist, " spd=", spd)
 
 	var meta := {
 		"delivery": "throw",
@@ -487,6 +626,7 @@ func _do_throw_to(target: Node2D) -> void:
 
 	_ball.process_mode = Node.PROCESS_MODE_INHERIT
 	_ball.global_position = _glove.global_position + dir * 2.0
+	_ball.set_meta("thrown_by", "fielder")
 
 	if _ball.has_method("deflect"):
 		_ball.deflect(dir, spd, meta)
@@ -512,6 +652,16 @@ func _do_throw_to(target: Node2D) -> void:
 	_has_ball = false
 	_ball = null
 	_throw_target = null
+	_intend_base = null
+	_intend_coverer = null
+
+func _get_glove_of(target: Node2D) -> Node2D:
+	if target == null:
+		return null
+	var glove := target.get_node_or_null("Glove") as Node2D
+	if glove != null:
+		return glove
+	return null
 
 func _on_ball_out_of_play() -> void:
 	_has_ball = false
@@ -521,6 +671,90 @@ func _on_ball_out_of_play() -> void:
 	_ball = null
 	if _state != S_RETURN:
 		_enter_state(S_RETURN)
+
+# ---------------- Catch incoming throws ----------------
+func _try_glove_incoming_throw() -> void:
+	var now := Time.get_ticks_msec() * 0.001
+	if now < _catch_cooldown_until:
+		return
+
+	var best: Node2D = null
+	var best_score := -1e9
+	var gpos := _glove.global_position
+
+	for n in get_tree().get_nodes_in_group("balls"):
+		var b := n as Node2D
+		if b == null:
+			continue
+		if b == _ball:
+			continue
+
+		var delivery := _delivery_of(b).to_lower()
+		if delivery != "throw":
+			continue
+		if b.has_meta("caught_by"):
+			continue
+
+		var bpos := b.global_position
+		var to_glove := gpos - bpos
+		var dist := to_glove.length()
+		var vel := _get_ball_velocity(b)
+		var speed := vel.length()
+		var toward := 0.0
+		if speed > 0.001 and dist > 0.001:
+			var dir_ball := vel / speed
+			var dir_to_glove := to_glove / dist
+			toward = dir_ball.dot(dir_to_glove)
+
+		var score := -dist + toward * 15.0
+		if score > best_score:
+			best_score = score
+			best = b
+
+	if best == null:
+		return
+
+	var g := _glove.global_position
+	var bp := best.global_position
+	var delta := g - bp
+	var d := delta.length()
+	var max_d := catch_radius_px + graze_extra_px
+	if d > max_d:
+		return
+
+	var v := _get_ball_velocity(best)
+	var s := v.length()
+	if s > max_catch_speed_to_fielder:
+		return
+
+	if require_approaching and s > 0.001 and d > 4.0:
+		var dir_ball := v / s
+		var dir_to_glove := delta / d
+		var dot := dir_ball.dot(dir_to_glove)
+		if dot < approach_dot_threshold:
+			return
+
+	_receive_ball_from_throw(best)
+	_catch_cooldown_until = now + catch_cooldown_sec
+
+func _receive_ball_from_throw(bb: Node2D) -> void:
+	_set_ball_velocity(bb, Vector2.ZERO)
+	if bb.has_method("clear_spin"):
+		bb.call("clear_spin")
+	bb.global_position = _glove.global_position
+	if bb is Node:
+		(bb as Node).set_meta("delivery_override", "caught")
+		(bb as Node).set_meta("caught_by", "fielder")
+	_has_ball = true
+	_ball = bb as Ball
+	if _ball and _ball.is_in_group("balls"):
+		_ball.remove_from_group("balls")
+	if _ball:
+		_ball.process_mode = Node.PROCESS_MODE_DISABLED
+
+	_emit_catch_puff(_glove.global_position)
+	_compute_intended_base_and_coverer()
+	_enter_state(S_THROW)
 
 # ---------------- Cover-Base ----------------
 func _cover_release_all() -> void:
@@ -545,6 +779,16 @@ func _get_bases() -> Array:
 	return bases
 
 func _is_infielder() -> bool:
+	# If explicitly marked outfielder, it’s not an infielder.
+	if is_outfielder:
+		return false
+	# If assigned to a base, definitely an infielder.
+	if assigned_base_path != NodePath():
+		return true
+	# Fallback: proximity heuristic
+	return _is_infielder_proximity()
+
+func _is_infielder_proximity() -> bool:
 	var bases := _get_bases()
 	if _home_marker == null or bases.is_empty():
 		return true
@@ -553,7 +797,35 @@ func _is_infielder() -> bool:
 			return true
 	return false
 
+func _is_infielder_strict() -> bool:
+	if is_outfielder:
+		return false
+	if assigned_base_path != NodePath():
+		return true
+	return _is_infielder_proximity()
+
 func _cover_tick(live: bool, is_hit: bool) -> void:
+	# Assigned-base fielders: default to standing on their bag whenever they’re not the chaser.
+	var my_base := _get_assigned_base()
+	if my_base != null:
+		if not live or not is_hit:
+			# Between plays: be on the bag
+			_cover_target = my_base
+			_cover_target.set_meta("coverer", get_instance_id())
+			_set_target(my_base.global_position)
+			return
+		# During a live hit
+		if _ball and _i_am_closest_to_ball(_ball):
+			# You’re the chaser; release bag temporarily
+			_cover_release_all()
+			return
+		# Otherwise, claim and stand on your base
+		_cover_target = my_base
+		_cover_target.set_meta("coverer", get_instance_id())
+		_set_target(my_base.global_position)
+		return
+
+	# Non-assigned infielders: take nearest uncovered base.
 	if not live or not is_hit or not _is_infielder():
 		_cover_release_all()
 		if not _relay_active:
@@ -570,6 +842,16 @@ func _cover_tick(live: bool, is_hit: bool) -> void:
 		var base := b as Node2D
 		if base == null:
 			continue
+		# Don’t steal a base from its assigned fielder unless no one is covering
+		if base.has_meta("assigned_fielder_id"):
+			var aid := int(base.get_meta("assigned_fielder_id"))
+			# If the assigned fielder exists and is not me, prefer they cover it.
+			if aid != get_instance_id():
+				# If already covered by anyone else, skip.
+				var claimA = base.get_meta("coverer") if base.has_meta("coverer") else null
+				if claimA != null:
+					continue
+		# Respect current coverer claim
 		var claim = base.get_meta("coverer") if base.has_meta("coverer") else null
 		if claim != null and int(claim) != get_instance_id():
 			continue
@@ -603,10 +885,10 @@ func _relay_tick(live: bool, is_hit: bool) -> bool:
 	if chaser == null:
 		_relay_clear()
 		return false
-	if chaser._is_infielder():
+	if chaser._is_infielder_strict():
 		_relay_clear()
 		return false
-	if not _is_infielder():
+	if not _is_infielder_strict():
 		_relay_clear()
 		return false
 	if chaser == self:
@@ -674,3 +956,78 @@ func _is_live_hit() -> bool:
 	if _ball.has_method("last_delivery"):
 		return String(_ball.last_delivery()).to_lower() == "hit"
 	return _ball.has_meta("batted") and bool(_ball.get_meta("batted"))
+
+func _ball_is_foul(b: Node) -> bool:
+	if b == null or not is_instance_valid(b):
+		return false
+	if b.has_method("is_foul"):
+		return bool(b.call("is_foul"))
+	if b.has_meta("foul"):
+		return bool(b.get_meta("foul"))
+	return false
+
+# ---------------- Catch FX (CPU particles, inline) ----------------
+func _emit_catch_puff(at: Vector2) -> void:
+	if not catch_puff_enabled:
+		return
+	var p := CPUParticles2D.new()
+	p.one_shot = true
+	p.local_coords = true
+	p.lifetime = max(0.2, catch_puff_lifetime_sec)
+	p.amount = 8
+	p.emission_shape = CPUParticles2D.EMISSION_SHAPE_POINT
+	p.position = to_local(at)
+
+	p.initial_velocity_min = 10.0
+	p.initial_velocity_max = 16.0
+	p.direction = Vector2(0, -1)
+	p.spread = 20.0
+	p.gravity = Vector2(0, -18)
+
+	var grad := Gradient.new()
+	grad.add_point(0.0, Color(0.92, 0.92, 0.92, 0.50))
+	grad.add_point(0.6, Color(0.88, 0.88, 0.88, 0.25))
+	grad.add_point(1.0, Color(0.85, 0.85, 0.85, 0.0))
+	p.color_ramp = grad
+
+	add_child(p)
+	p.emitting = true
+
+	var t := get_tree().create_timer(p.lifetime + 0.1, true, true)
+	await t.timeout
+	if is_instance_valid(p):
+		p.queue_free()
+
+# ---------------- shared helpers for catching ----------------
+func _delivery_of(b: Node2D) -> String:
+	if b.has_meta("delivery_override"):
+		return String(b.get_meta("delivery_override"))
+	if b.has_meta("delivery"):
+		return String(b.get_meta("delivery"))
+	if b.has_method("last_delivery"):
+		return String(b.call("last_delivery"))
+	return "unknown"
+
+func _get_ball_velocity(b: Node2D) -> Vector2:
+	if b.has_method("get_velocity"):
+		var v = b.call("get_velocity")
+		if typeof(v) == TYPE_VECTOR2:
+			return v
+	var v1 = b.get("velocity")
+	if typeof(v1) == TYPE_VECTOR2:
+		return v1
+	var v2 = b.get("linear_velocity")
+	if typeof(v2) == TYPE_VECTOR2:
+		return v2
+	return Vector2.ZERO
+
+func _set_ball_velocity(b: Node2D, v: Vector2) -> void:
+	if b.has_method("set_velocity"):
+		b.call("set_velocity", v)
+	elif b.has_method("set_linear_velocity"):
+		b.call("set_linear_velocity", v)
+	elif b.has_method("set"):
+		if typeof(b.get("velocity")) == TYPE_VECTOR2:
+			b.set("velocity", v)
+		elif typeof(b.get("linear_velocity")) == TYPE_VECTOR2:
+			b.set("linear_velocity", v)

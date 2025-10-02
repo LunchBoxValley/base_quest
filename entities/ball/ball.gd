@@ -7,6 +7,10 @@ signal wall_hit(normal: Vector2)
 @export var speed: float = 220.0
 @export var max_travel: float = 200.0   # baseline travel for pitches/throws
 
+# --- NEW: foul cleanup (keeps fair balls alive) ---
+@export_group("Rules / Cleanup")
+@export var foul_despawn_sec: float = 1.5
+
 # --- Spin (micro juice) ---
 @export_group("Spin")
 @export var spin_fps: float = 18.0
@@ -80,17 +84,17 @@ signal wall_hit(normal: Vector2)
 @export var apex_liner_px: float = 10.0
 @export var apex_fly_px: float = 24.0
 @export var apex_blast_px: float = 36.0
-@export var hr_height_multiplier: float = 1.15   # PATCH: was 1.0 — gentle clearance nudge
+@export var hr_height_multiplier: float = 1.15   # gentle clearance nudge
 
 # --- Arcade HR Tuning (probability & boosts) ---
 @export_group("Arcade HR Tuning")
-@export var hit_max_travel_base: float = 320.0     # ↑ farther baseline for hits
-@export var hr_base_chance: float = 0.25           # ↑ base HR-candidate chance
-@export var hr_good_contact_bonus: float = 0.35    # ↑ bonus on good/perfect
-@export var hr_speed_boost_range: Vector2 = Vector2(1.25, 1.55)     # ↑ hotter exit velo
-@export var hr_apex_bonus_px_range: Vector2 = Vector2(18.0, 36.0)   # ↑ higher apex
-@export var hr_travel_bonus_px_range: Vector2 = Vector2(100.0, 180.0) # ↑ longer carry
-@export var hr_perfect_guarantee: bool = true      # NEW: perfect contact always procs
+@export var hit_max_travel_base: float = 320.0
+@export var hr_base_chance: float = 0.25
+@export var hr_good_contact_bonus: float = 0.35
+@export var hr_speed_boost_range: Vector2 = Vector2(1.25, 1.55)
+@export var hr_apex_bonus_px_range: Vector2 = Vector2(18.0, 36.0)
+@export var hr_travel_bonus_px_range: Vector2 = Vector2(100.0, 180.0)
+@export var hr_perfect_guarantee: bool = true
 
 # --- Debug / Power Hit (still available) ---
 @export_group("Debug / Power Hit")
@@ -131,6 +135,10 @@ var _bounces_left: int = 0
 var _in_roll: bool = false
 var _dropped: bool = false
 
+# --- NEW: foul state ---
+var _is_foul: bool = false
+var _foul_timer: Timer = null
+
 # Node refs
 @onready var anim: AnimatedSprite2D = $Anim
 @onready var sprite: Sprite2D = $Sprite
@@ -155,6 +163,14 @@ func _ready() -> void:
 		shadow.position = shadow_base_offset + Vector2(0, shadow_y_offset)
 	if _sweep:
 		_sweep.enabled = false
+
+	# NEW: local foul timer
+	if _foul_timer == null:
+		_foul_timer = Timer.new()
+		_foul_timer.one_shot = true
+		add_child(_foul_timer)
+		if not _foul_timer.timeout.is_connected(_on_foul_timeout):
+			_foul_timer.timeout.connect(_on_foul_timeout)
 
 func pitch_from(start_global: Vector2, direction: Vector2 = Vector2.DOWN, custom_speed: float = -1.0) -> void:
 	_reset_state()
@@ -232,7 +248,6 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 			_velocity *= spd_mul
 			H += randf_range(hr_apex_bonus_px_range.x, hr_apex_bonus_px_range.y)
 			_max_travel_runtime += randf_range(hr_travel_bonus_px_range.x, hr_travel_bonus_px_range.y)
-			# PATCH: HR candidates should use BLAST arc, not FLY
 			_kind = KIND_BLAST
 
 	# Set z kinematics for hits
@@ -263,6 +278,29 @@ func deflect(direction: Vector2, new_speed: float, meta: Dictionary = {}) -> voi
 func mark_thrown() -> void: _delivery = "throw"
 func last_delivery() -> String: return _delivery
 
+# --- NEW: mark foul & foul query ---
+func mark_foul() -> void:
+	if _is_foul:
+		return
+	_is_foul = true
+	set_meta("foul", true)
+	# Keep the ball visible/active briefly so players can see it go foul.
+	if _foul_timer:
+		_foul_timer.start(max(0.2, foul_despawn_sec))
+
+func is_foul() -> bool:
+	if _is_foul:
+		return true
+	if has_meta("foul"):
+		return bool(get_meta("foul"))
+	return false
+
+func _on_foul_timeout() -> void:
+	# Tell the game this ball is out of play, then despawn.
+	if is_inside_tree():
+		out_of_play.emit()
+	queue_free()
+
 func _reset_state() -> void:
 	_distance_traveled = 0.0
 	_last_bounce_at = 0.0
@@ -276,13 +314,22 @@ func _reset_state() -> void:
 	_vz = 0.0
 	_airborne = false
 	_max_travel_runtime = max_travel
+	# Reset foul flag on every new flight
+	_is_foul = false
+	if has_meta("foul"):
+		remove_meta("foul")  # <-- fixed
+	if _foul_timer:
+		_foul_timer.stop()
 
 func _start_spin() -> void:
 	if anim and anim.sprite_frames:
 		var frames := anim.sprite_frames
 		var names := frames.get_animation_names()
 		if names.size() > 0:
-			anim.animation = "spin" if names.has("spin") else names[0]
+			if names.has("spin"):
+				anim.animation = "spin"
+			else:
+				anim.animation = names[0]
 			anim.speed_scale = anim_speed_scale
 			anim.play()
 			_spin_active = false
@@ -321,7 +368,10 @@ func _physics_process(delta: float) -> void:
 			var move_vec := step
 			if d < step.length():
 				var safe_d = max(0.0, d - sweep_epsilon)
-				move_vec = to_hit.normalized() * safe_d if safe_d > 0.0 else Vector2.ZERO
+				if safe_d > 0.0:
+					move_vec = to_hit.normalized() * safe_d
+				else:
+					move_vec = Vector2.ZERO
 			global_position += move_vec
 		else:
 			global_position += step

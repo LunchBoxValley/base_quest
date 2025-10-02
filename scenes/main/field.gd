@@ -37,13 +37,16 @@ signal home_run
 @export var back_wall_height_px: float = 12.0
 @export var side_wall_height_px: float = 8.0
 @export var side_wall_width_px: float = 4.0
-@export var wall_bounce_damping: float = 0.85
-@export var wall_random_angle_deg: float = 12.0
+@export var wall_bounce_damping: float = 0.85         # side posts (legacy)
+@export var wall_random_angle_deg: float = 12.0       # side posts (legacy)
+# NEW: back-wall specific damping/angle so rebounds keep only ~10–20% speed
+@export var back_wall_bounce_damping: float = 0.15
+@export var back_wall_random_angle_deg: float = 8.0
 
 @export_group("HR Tuning")
-@export var hr_clearance_bias_px: float = 2.0           # was 0.0 — tiny clearance nudge, additive only
-@export var debug_force_hr_clear: bool = false          # when true, treat any *airborne* ball as clearing
-@export var debug_force_requires_air: bool = true       # prevents rollers from counting with debug
+@export var hr_clearance_bias_px: float = 2.0
+@export var debug_force_hr_clear: bool = false
+@export var debug_force_requires_air: bool = true
 
 # ---------------- Zoning (infield/outfield + left/right) ----------------
 @export_group("Zoning / Fielders")
@@ -53,8 +56,8 @@ signal home_run
 @export var left_fielder_path: NodePath
 @export var right_fielder_path: NodePath
 
-@export var infield_radius_px: float = 150.0   # <= infield, > outfield
-@export var zone_stickiness_px: float = 24.0   # keep current claimer if still competitive
+@export var infield_radius_px: float = 150.0
+@export var zone_stickiness_px: float = 24.0
 
 var _plate: Node2D
 var _ball: Node2D = null
@@ -169,7 +172,8 @@ func _physics_process(_delta: float) -> void:
 		if height_px >= back_wall_height_px:
 			_award_hr_then_end()
 			return
-		_bounce_ball(Vector2(0, 1))
+		# Use strong damping on the BACK WALL only (~10–20% speed kept)
+		_bounce_ball_with(Vector2(0, 1), back_wall_bounce_damping, back_wall_random_angle_deg)
 		return
 
 	# --------- SIDE POSTS (outside foul lines) ---------
@@ -177,16 +181,20 @@ func _physics_process(_delta: float) -> void:
 	var y_high := outfield_wall_y + side_wall_height_px
 	if pos.y >= y_low and pos.y <= y_high:
 		if pos.x >= xl - side_wall_width_px and pos.x < xl:
-			_bounce_ball(Vector2(1, 0))
+			_bounce_ball(Vector2(1, 0))   # side posts use legacy damping/angle
 			return
 		if pos.x > xr and pos.x <= xr + side_wall_width_px:
-			_bounce_ball(Vector2(-1, 0))
+			_bounce_ball(Vector2(-1, 0))  # side posts use legacy damping/angle
 			return
 
-	# FOUL
+	# ---------------- FOUL ----------------
 	if pos.x < xl or pos.x > xr:
 		if not (_ball.has_meta("ruled") and _ball.get_meta("ruled")):
 			_ball.set_meta("ruled", true)
+			# Tag for timed cleanup + broadcast (Ball.mark_foul handles fade/despawn)
+			if _ball.has_method("mark_foul"):
+				_ball.call("mark_foul")
+			foul_ball.emit()
 			GameManager.call_foul()
 		_end_play()
 		return
@@ -224,6 +232,13 @@ func _on_ball_wall_hit(_normal: Vector2) -> void:
 func _bounce_ball(normal: Vector2) -> void:
 	if is_instance_valid(_ball) and _ball.has_method("wall_bounce"):
 		_ball.call("wall_bounce", normal, wall_bounce_damping, wall_random_angle_deg)
+	else:
+		_end_play()
+
+# NEW: custom damping/angle bounce (used by back wall)
+func _bounce_ball_with(normal: Vector2, damping: float, random_angle_deg: float) -> void:
+	if is_instance_valid(_ball) and _ball.has_method("wall_bounce"):
+		_ball.call("wall_bounce", normal, clamp(damping, 0.0, 1.0), random_angle_deg)
 	else:
 		_end_play()
 
@@ -277,9 +292,6 @@ func _hr_fx_coroutine() -> void:
 	_hr_fx_running = false
 
 # ---------------- Fielder Throw Target API (minimal, non-breaking) ----------------
-# Returns the best force-out base for the *batter-runner*.
-# For the current arcade flow (no existing runners), this is First Base.
-# Falls back to the Pitcher if First Base isn't available; else returns null.
 func choose_force_base(team_id: int) -> Node:
 	var base1 := get_node_or_null(first_base_path)
 	if base1:
@@ -290,7 +302,6 @@ func choose_force_base(team_id: int) -> Node:
 	return null
 
 # ---------------- Zone Ownership API (additive) ----------------
-# Decide who should own a point on the field.
 func choose_zone_fielder_for_point(point: Vector2) -> Node:
 	var home := _plate if _plate else get_node_or_null(home_plate_path)
 	if home == null:
